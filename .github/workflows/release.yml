@@ -54,6 +54,14 @@ jobs:
         with:
           changelog-path: CHANGELOG.md
 
+      - name: Delete existing release if present
+        continue-on-error: true
+        run: |
+          gh release delete "${{ github.ref_name }}" --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
