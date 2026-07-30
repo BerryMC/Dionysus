@@ -1,11 +1,5 @@
 # Dionysus
 
-## RETIRED / ARCHIVED
-
-This project is now archived as I do not have time to maintain this and I no longer play Minecraft 1.12.2.
-
-#### The rest of the old documentation is below.
-
 [![GitHub all releases](https://img.shields.io/github/downloads/nopjmp/Dionysus/total)](https://github.com/nopjmp/Dionysus/releases)
 [![GitHub contributors](https://img.shields.io/github/contributors/nopjmp/dionysus)](https://github.com/nopjmp/Dionysus/graphs/contributors) 
 [![GitHub issues](https://img.shields.io/github/issues/nopjmp/Dionysus)](https://github.com/nopjmp/Dionysus/issues)
