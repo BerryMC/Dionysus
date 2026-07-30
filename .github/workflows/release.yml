@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-release:
     name: Create Release
@@ -40,7 +43,7 @@ jobs:
       - name: Build Dionysus
         run: |
           ./dionysus build
-          ./scripts/paperclip.sh
+          ./scripts/paperclip.sh .
 
       - uses: actions/upload-artifact@v4
         with:
