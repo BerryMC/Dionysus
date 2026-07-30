@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.18]
+
+* Remove duplicate Add-Sendable-Interface patch
+* Fix build with JDK 8/17 dual requirement
+* Update GitHub Actions workflow to use v4 actions
+* Remove archived notice from README
+
 ## [0.1.17] - 2023-04-20
 
 * drop async world tick
