@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build-release:
-    name: Create Release
+    name: Build and Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,17 +45,21 @@ jobs:
           ./dionysus build
           ./scripts/paperclip.sh .
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Dionysus-JDK17
-          path: dionysus-paperclip.jar
+      - name: Verify jar exists
+        run: ls -la dionysus-paperclip.jar
 
       - name: Extract release notes
         id: extract_release_notes
         uses: ffurrer2/extract-release-notes@v2
+        with:
+          changelog-path: CHANGELOG.md
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           body: ${{ steps.extract_release_notes.outputs.release_notes }}
-          files: dionysus-paperclip.jar
+          files: |
+            dionysus-paperclip.jar
+          fail_on_unmatched_files: true
