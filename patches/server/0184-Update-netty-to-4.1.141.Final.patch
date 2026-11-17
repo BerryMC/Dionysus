@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 09:47:32 +0800
+Subject: [PATCH] Update netty to 4.1.141.Final
+
+Bump netty-all from 4.1.77.Final (early 2022) to the latest 4.1.x
+release, pulling in two years of CVE fixes and JDK 21+ compatibility
+improvements (reduced sun.misc.Unsafe reliance on modern JVMs).
+
+All netty usage in this codebase is on stable 4.1 APIs (ServerBootstrap,
+ChannelInitializer, Nio/Epoll event loops, codecs, FlushConsolidation
+Handler, ReadTimeoutHandler, FastThreadLocalThread, AttributeKey), so
+this is a drop-in bump. ProtocolLib/ProtocolSupport on 1.12.2 use the
+same stable surface; report any plugin-side netty issues upstream.
+
+diff --git a/pom.xml b/pom.xml
+index 9c7f0d20b078459eaf0650adab102ca06bc904bd..6e559977dfbabcbbe8ecf82b0dd9af654ee7c2ed 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -35,7 +35,7 @@
+         <dependency>
+             <groupId>io.netty</groupId>
+             <artifactId>netty-all</artifactId>
+-            <version>4.1.77.Final</version>
++            <version>4.1.141.Final</version>
+             <scope>compile</scope>
+         </dependency>
+         <dependency>

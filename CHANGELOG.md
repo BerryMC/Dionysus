@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+* Update netty to 4.1.141.Final (CVE fixes, JDK 21+ compatibility)
+
 * Add crop and stem growth RNG optimization (`crop.optimize-growth`, default off)
 * Add pathfinding skip when no player is nearby (`pathfinding.optimize`, default off)
 * Add scheduled tick processing optimization (`scheduled-ticks.optimize`, default off)
