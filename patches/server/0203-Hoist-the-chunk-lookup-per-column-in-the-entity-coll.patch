@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 00:00:38 +0800
+Subject: [PATCH] Hoist the chunk lookup per column in the entity collision
+ scan
+
+World#a(Entity, AxisAlignedBB, boolean, List) is the hottest math path in
+the server: every entity movement resolves the collision boxes for its
+swept AABB. The x/z loops skipped unloaded columns via World#isLoaded, but
+the y-loop then called World#getType for every block, and getType re-looks
+up the chunk through ChunkProviderServer#getChunkAt on every call - up to
+16 redundant lookups per column, hundreds per query.
+
+Resolve the chunk once per column with ChunkProviderServer#getChunkIfLoaded
+(identical to the isLoaded check it replaces) and read blocks through
+Chunk#getBlockData(int,int,int), which bounds-checks y and returns AIR
+outside 0..255 exactly like the getType path did. The CraftBukkit
+tree-generation capture semantics are preserved (capture is checked before
+the fast read, with the same null-fallback), as are the world-border stone
+substitution, the flag-mode early exit and the onGround tracking call.
+
+Verified: compile only. Runtime behaviour should be exercised by moving
+entities around loaded chunks (walk, ride boats/minecarts, push against
+walls).
+
+diff --git a/src/main/java/net/minecraft/server/World.java b/src/main/java/net/minecraft/server/World.java
+index 4da5fcb27184094d11427a308793bfbd9549b6c3..392842d1de0d56b95abcf0d3c9ef1a6f559ac529 100644
+--- a/src/main/java/net/minecraft/server/World.java
++++ b/src/main/java/net/minecraft/server/World.java
+@@ -1365,7 +1365,13 @@ public abstract class World implements IBlockAccess {
+                     boolean flag3 = k1 == i || k1 == j - 1;
+                     boolean flag4 = l1 == i1 || l1 == j1 - 1;
+ 
+-                    if ((!flag3 || !flag4) && this.isLoaded(blockposition_pooledblockposition.f(k1, 64, l1))) {
++                    // Dionysus start - resolve the chunk once per column. The chunk depends
++                    // only on x/z, but the y-loop previously re-looked it up through
++                    // World#getType for every block (up to 16 redundant lookups per column)
++                    // on the hottest path in the game (every entity movement).
++                    final Chunk chunk = this.getChunkIfLoaded(k1 >> 4, l1 >> 4);
++
++                    if ((!flag3 || !flag4) && chunk != null) {
+                         for (int i2 = k; i2 < l; ++i2) {
+                             if (!flag3 && !flag4 || i2 != l - 1) {
+                                 if (flag) {
+@@ -1383,8 +1389,14 @@ public abstract class World implements IBlockAccess {
+ 
+                                 if (!flag && !worldborder.a((BlockPosition) blockposition_pooledblockposition) && flag2) {
+                                     iblockdata1 = iblockdata;
++                                } else if (captureTreeGeneration) {
++                                    // keep CraftBukkit tree-generation capture semantics
++                                    IBlockData previous = getCapturedBlockType(k1, i2, l1);
++                                    iblockdata1 = previous != null ? previous : chunk.getBlockData(k1, i2, l1);
+                                 } else {
+-                                    iblockdata1 = this.getType(blockposition_pooledblockposition);
++                                    // chunk.getBlockData bounds-checks y and returns AIR outside 0..255,
++                                    // matching what World#getType resolved to anyway.
++                                    iblockdata1 = chunk.getBlockData(k1, i2, l1);
+                                 }
+ 
+                                 iblockdata1.a(this, blockposition_pooledblockposition, axisalignedbb, list, entity, false);
