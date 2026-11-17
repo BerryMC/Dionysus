@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 01:37:36 +0800
+Subject: [PATCH] Optimize crop and stem growth RNG
+
+Replace nextInt(bound) == 0 growth rolls in BlockCrops and BlockStem
+with a single nextFloat() comparison. The growth probability is
+statistically identical (1/bound), but nextInt(bound) can consume
+multiple RNG calls per roll (rejection sampling on non-power-of-two
+bounds) while nextFloat() always consumes exactly one.
+
+Behind crop.optimize-growth in dionysus.yml, default false.
+
+Technique inspired by Airplane's 'Optimize random calls in chunk
+ticking' already ported elsewhere in this codebase.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index 43fcdf35129711b092e872c52a398cb1f823dad9..b75dc044bc7fb598dc82663dd3040c4fe655c51f 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -422,4 +422,12 @@ public class DionysusConfig {
+                 Allows you to set how many ticks information about the time change should be sent to players.
+                 Value 0 disables sending information about time changes.""");
+     }
++
++    public static boolean optimizeCrops = false;
++    private static void optimizeCrops() {
++        optimizeCrops = getBoolean("crop.optimize-growth", optimizeCrops, """
++                Use a single nextFloat() RNG call for crop and stem growth rolls instead
++                of nextInt(bound). Growth probability is statistically identical, but
++                farms with thousands of crops save RNG work on every random tick.""");
++    }
+ }
+diff --git a/src/main/java/net/minecraft/server/BlockCrops.java b/src/main/java/net/minecraft/server/BlockCrops.java
+index 55ed0c956cfb3c523896d91136be0de995437498..3094bfbb3f335a22272b026033b667b744d34c4b 100644
+--- a/src/main/java/net/minecraft/server/BlockCrops.java
++++ b/src/main/java/net/minecraft/server/BlockCrops.java
+@@ -54,7 +54,9 @@ public class BlockCrops extends BlockPlant implements IBlockFragilePlantElement
+             if (i < this.g()) {
+                 float f = a((Block) this, world, blockposition);
+ 
+-                if (random.nextInt((int) ((100.0F / world.spigotConfig.wheatModifier) * (25.0F / f)) + 1) == 0) { // Spigot
++                // Dionysus start - use a single nextFloat() call instead of nextInt(bound); same probability, cheaper RNG
++                if (random.nextFloat() * ((int) ((100.0F / world.spigotConfig.wheatModifier) * (25.0F / f)) + 1) < 1.0F) { // Spigot
++                // Dionysus end
+                     // CraftBukkit start
+                     IBlockData data = this.setAge(i + 1);
+                     CraftEventFactory.handleBlockGrowEvent(world, blockposition.getX(), blockposition.getY(), blockposition.getZ(), this, toLegacyData(data));
+diff --git a/src/main/java/net/minecraft/server/BlockStem.java b/src/main/java/net/minecraft/server/BlockStem.java
+index 5ae7bd9dff0099690c275acf92bfa01639a2f1bd..f0491eb9cc62d6af7d2961fe9aa325b8b2b40001 100644
+--- a/src/main/java/net/minecraft/server/BlockStem.java
++++ b/src/main/java/net/minecraft/server/BlockStem.java
+@@ -51,7 +51,9 @@ public class BlockStem extends BlockPlant implements IBlockFragilePlantElement {
+         if (world.isLightLevel(blockposition.up(), 9)) { // Paper
+             float f = BlockCrops.a((Block) this, world, blockposition);
+ 
+-            if (random.nextInt((int) ((100.0F / (this == Blocks.PUMPKIN_STEM ? world.spigotConfig.pumpkinModifier : world.spigotConfig.melonModifier)) * (25.0F / f)) + 1) == 0) { // Spigot
++            // Dionysus start - use a single nextFloat() call instead of nextInt(bound); same probability, cheaper RNG
++            if (random.nextFloat() * ((int) ((100.0F / (this == Blocks.PUMPKIN_STEM ? world.spigotConfig.pumpkinModifier : world.spigotConfig.melonModifier)) * (25.0F / f)) + 1) < 1.0F) { // Spigot
++            // Dionysus end
+                 int i = ((Integer) iblockdata.get(BlockStem.AGE)).intValue();
+ 
+                 if (i < 7) {

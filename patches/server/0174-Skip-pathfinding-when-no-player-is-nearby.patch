@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 01:38:43 +0800
+Subject: [PATCH] Skip pathfinding when no player is nearby
+
+Port the EMC-style pathfinding optimization: before building the
+ChunkCache snapshot and running the A* search, check whether any
+player is within pathfinding.max-player-distance (default 32) blocks
+of the entity. If not, return null immediately.
+
+This skips both the ChunkCache construction (a follow-range cube of
+block lookups) and the A* itself for mobs that no player can observe,
+which is the dominant cost on mob farms and in areas beyond spawn.
+
+Behind pathfinding.optimize in dionysus.yml, default false.
+
+Based on the approach from Aikar's EMC 'Optimize Navigation'.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index b75dc044bc7fb598dc82663dd3040c4fe655c51f..57793ecbaa3a03cbbb82a1c96060ce231d1853d4 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -430,4 +430,17 @@ public class DionysusConfig {
+                 of nextInt(bound). Growth probability is statistically identical, but
+                 farms with thousands of crops save RNG work on every random tick.""");
+     }
++
++    public static boolean pathfindingOptimize = false;
++    public static double pathfindingMaxPlayerDistance = 32.0D;
++    private static void pathfinding() {
++        pathfindingOptimize = getBoolean("pathfinding.optimize", pathfindingOptimize, """
++                Skip A* pathfinding for entities when no player is within
++                pathfinding.max-player-distance blocks of them. Mob farms and areas
++                far away from any player keep their mobs idle instead of constantly
++                recomputing paths nobody will ever see.""");
++        pathfindingMaxPlayerDistance = getDouble("pathfinding.max-player-distance", pathfindingMaxPlayerDistance, """
++                The radius in blocks in which a player must be to allow pathfinding
++                when pathfinding.optimize is enabled.""");
++    }
+ }
+diff --git a/src/main/java/net/minecraft/server/NavigationAbstract.java b/src/main/java/net/minecraft/server/NavigationAbstract.java
+index 935b2e81e5fe67bf03cd006630370599ca0114aa..fef5b07df73158ef55d52d449999dc3ff723b12e 100644
+--- a/src/main/java/net/minecraft/server/NavigationAbstract.java
++++ b/src/main/java/net/minecraft/server/NavigationAbstract.java
+@@ -1,5 +1,7 @@
+ package net.minecraft.server;
+ 
++import dev.pomf.dionysus.DionysusConfig; // Dionysus
++import java.util.List; // Dionysus
+ import javax.annotation.Nullable;
+ 
+ public abstract class NavigationAbstract {
+@@ -75,6 +77,11 @@ public abstract class NavigationAbstract {
+         } else if (this.c != null && !this.c.b() && blockposition.equals(this.q)) {
+             return this.c;
+         } else {
++            // Dionysus start - skip expensive pathfinding when no player is nearby (invisible to players)
++            if (DionysusConfig.pathfindingOptimize && !this.hasPlayerNearby()) {
++                return null;
++            }
++            // Dionysus end
+             if (!new com.destroystokyo.paper.event.entity.EntityPathfindEvent(getEntity().getBukkitEntity(), MCUtil.toLocation(getEntity().world, blockposition), null).callEvent()) { return null; } // Paper
+             this.q = blockposition;
+             float f = this.i();
+@@ -101,6 +108,11 @@ public abstract class NavigationAbstract {
+             if (this.c != null && !this.c.b() && blockposition.equals(this.q)) {
+                 return this.c;
+             } else {
++                // Dionysus start - skip expensive pathfinding when no player is nearby (invisible to players)
++                if (DionysusConfig.pathfindingOptimize && !this.hasPlayerNearby()) {
++                    return null;
++                }
++                // Dionysus end
+                 if (!new com.destroystokyo.paper.event.entity.EntityPathfindEvent(getEntity().getBukkitEntity(), MCUtil.toLocation(entity.world, blockposition), entity.getBukkitEntity()).callEvent()) { return null; } // Paper
+                 this.q = blockposition;
+                 float f = this.i();
+@@ -117,6 +129,34 @@ public abstract class NavigationAbstract {
+         }
+     }
+ 
++    // Dionysus start - pathfinding optimization helper
++    private boolean hasPlayerNearby() {
++        List<EntityHuman> players = this.b.players;
++
++        if (players.isEmpty()) {
++            return false;
++        }
++
++        double d3 = DionysusConfig.pathfindingMaxPlayerDistance * DionysusConfig.pathfindingMaxPlayerDistance;
++        double d0 = this.a.locX;
++        double d1 = this.a.locY;
++        double d2 = this.a.locZ;
++
++        for (int i = 0; i < players.size(); ++i) {
++            EntityHuman entityhuman = (EntityHuman) players.get(i);
++            double dx = entityhuman.locX - d0;
++            double dy = entityhuman.locY - d1;
++            double dz = entityhuman.locZ - d2;
++
++            if (dx * dx + dy * dy + dz * dz < d3) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++    // Dionysus end
++
+     public boolean a(double d0, double d1, double d2, double d3) {
+         return this.a(this.a(d0, d1, d2), d3);
+     }

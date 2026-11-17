@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 01:40:15 +0800
+Subject: [PATCH] Optimize scheduled tick processing
+
+Optimizations to the WorldServer NextTickListEntry processing loop
+(WorldServer.a(boolean)), behind scheduled-ticks.optimize (default
+false):
+
+- Drain due entries from the HashTreeSet with a new pollFirst()
+  (single TreeSet operation + hash removal) instead of the
+  first() + remove() double lookup per entry. The not-yet-due entry
+  is re-added on break, preserving ordering since the set is ordered
+  by due time.
+- Hoist the worldData.getTime() lookup out of the drain loop.
+- Pass the entry position directly to areChunksLoadedBetween instead
+  of allocating two throwaway BlockPosition.a(0,0,0) instances per
+  entry; both are coordinate-identical so the semantics are
+  unchanged.
+
+Redstone-heavy worlds schedule thousands of entries per tick and walk
+this loop constantly.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index 57793ecbaa3a03cbbb82a1c96060ce231d1853d4..7d90569b0393b9cdef862300ff64672a45b7f5e4 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -443,4 +443,15 @@ public class DionysusConfig {
+                 The radius in blocks in which a player must be to allow pathfinding
+                 when pathfinding.optimize is enabled.""");
+     }
++
++    public static boolean optimizeScheduledTicks = false;
++    private static void optimizeScheduledTicks() {
++        optimizeScheduledTicks = getBoolean("scheduled-ticks.optimize", optimizeScheduledTicks, """
++                Optimize the WorldServer scheduled tick (NextTickListEntry) processing
++                loop: drain due entries with a single pollFirst() per entry instead of
++                first() + remove() double lookups, hoist the time lookup out of the
++                loop and avoid per-entry BlockPosition allocations. Redstone-heavy
++                worlds schedule thousands of ticks per tick and pay this cost
++                constantly.""");
++    }
+ }
+diff --git a/src/main/java/net/minecraft/server/WorldServer.java b/src/main/java/net/minecraft/server/WorldServer.java
+index 1523082a7429178bd67d4d2235cc3dd91ad285dd..c1137ee025848f450473718eb2010a133d69d090 100644
+--- a/src/main/java/net/minecraft/server/WorldServer.java
++++ b/src/main/java/net/minecraft/server/WorldServer.java
+@@ -27,6 +27,7 @@ import java.util.logging.Level;
+ import org.bukkit.WeatherType;
+ import org.bukkit.block.BlockState;
+ import org.bukkit.craftbukkit.util.HashTreeSet;
++import dev.pomf.dionysus.DionysusConfig; // Dionysus
+ 
+ import org.bukkit.event.block.BlockFormEvent;
+ import org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason;
+@@ -743,18 +744,38 @@ public class WorldServer extends World implements IAsyncTaskHandler {
+ 
+                 timings.scheduledBlocksCleanup.startTiming(); // Paper
+                 NextTickListEntry nextticklistentry;
++                boolean optimizeScheduledTicks = DionysusConfig.optimizeScheduledTicks; // Dionysus
++                long now = this.worldData.getTime(); // Dionysus - hoist time lookup out of the loop
++
++                // Dionysus start - drain the set with a single pollFirst per entry instead of first() + remove()
++                if (optimizeScheduledTicks) {
++                    for (int j = 0; j < i; ++j) {
++                        nextticklistentry = (NextTickListEntry) this.nextTickList.pollFirst();
++                        if (nextticklistentry == null) {
++                            break;
++                        }
++
++                        if (!flag && nextticklistentry.b > now) {
++                            this.nextTickList.add(nextticklistentry); // put the not-yet-due entry back
++                            break;
++                        }
+ 
+-                for (int j = 0; j < i; ++j) {
+-                    nextticklistentry = (NextTickListEntry) this.nextTickList.first();
+-                    if (!flag && nextticklistentry.b > this.worldData.getTime()) {
+-                        break;
++                        this.W.add(nextticklistentry);
+                     }
++                } else {
++                    for (int j = 0; j < i; ++j) {
++                        nextticklistentry = (NextTickListEntry) this.nextTickList.first();
++                        if (!flag && nextticklistentry.b > this.worldData.getTime()) {
++                            break;
++                        }
+ 
+-                    // CraftBukkit - use nextTickList
+-                    this.nextTickList.remove(nextticklistentry);
+-                    // this.nextTickListHash.remove(nextticklistentry);
+-                    this.W.add(nextticklistentry);
++                        // CraftBukkit - use nextTickList
++                        this.nextTickList.remove(nextticklistentry);
++                        // this.nextTickListHash.remove(nextticklistentry);
++                        this.W.add(nextticklistentry);
++                    }
+                 }
++                // Dionysus end
+                 timings.scheduledBlocksCleanup.stopTiming(); // Paper
+ 
+                 this.methodProfiler.b();
+@@ -767,7 +788,7 @@ public class WorldServer extends World implements IAsyncTaskHandler {
+                     iterator.remove();
+                     boolean flag1 = false;
+ 
+-                    if (this.areChunksLoadedBetween(nextticklistentry.a.a(0, 0, 0), nextticklistentry.a.a(0, 0, 0))) {
++                    if (optimizeScheduledTicks ? this.areChunksLoadedBetween(nextticklistentry.a, nextticklistentry.a) : this.areChunksLoadedBetween(nextticklistentry.a.a(0, 0, 0), nextticklistentry.a.a(0, 0, 0))) { // Dionysus - pass the entry position directly, avoiding two BlockPosition allocations per entry
+                         IBlockData iblockdata = this.getType(nextticklistentry.a);
+                         co.aikar.timings.Timing timing = iblockdata.getBlock().getTiming(); // Paper
+                         timing.startTiming(); // Paper
+diff --git a/src/main/java/org/bukkit/craftbukkit/util/HashTreeSet.java b/src/main/java/org/bukkit/craftbukkit/util/HashTreeSet.java
+index cd864c404747f8f77417e67ca319b3daa04bae59..39e89c9df35edeb76b8f7f6998aea60e64e88d31 100644
+--- a/src/main/java/org/bukkit/craftbukkit/util/HashTreeSet.java
++++ b/src/main/java/org/bukkit/craftbukkit/util/HashTreeSet.java
+@@ -114,4 +114,16 @@ public class HashTreeSet<V> implements Set<V> {
+         return tree.first();
+     }
+ 
++    // Dionysus start - add pollFirst to drain the set with a single tree operation
++    public V pollFirst() {
++        V v = tree.pollFirst();
++
++        if (v != null) {
++            hash.remove(v);
++        }
++
++        return v;
++    }
++    // Dionysus end
++
+ }

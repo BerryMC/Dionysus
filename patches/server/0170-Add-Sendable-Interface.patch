@@ -741,7 +741,7 @@ index d259cfb82f8d4dbe925e55f059a5d0cbfaa20127..533b8e78f6edec6c19e43abb163bd36f
      public Material getPlaying() {
          ItemStack record = this.getSnapshot().getRecord();
 diff --git a/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java b/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java
-index f1a3ca9509ebc50eaa67bf4dac2645f5ee37bbef..bb3c42a9ec448655e45a26a58fc08f2ae14eed2e 100644
+index 1b85e3c4f7d8d7dbc000c00fb337d424c9a8c7e3..671bbd935432669244847af1550070b56a6c97fd 100644
 --- a/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java
 +++ b/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java
 @@ -127,6 +127,10 @@ public class CraftEventFactory {

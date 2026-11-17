@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 01:53:59 +0800
+Subject: [PATCH] Skip hopper suction entity scan when provably empty
+
+Skip the TileEntityHopper.getInventory entity scan when the scanned
+entity slices cannot contain a match for IEntitySelector.c.
+
+Minecart safety: IEntitySelector.c matches EntityItem and IInventory
+entities (minecart chests/hoppers/furnaces). Paper already tracks
+itemCounts[] and inventoryEntityCounts[] per entity slice in Chunk,
+maintained on every entity add/remove. The new
+Chunk.hasHopperCandidateEntities(sliceLo, sliceHi) helper checks the
+exact slice range that world.getEntities would scan (AABB y range
+extended by 2 slices, matching Chunk.a). The scan is skipped only
+when every scanned slice has zero candidates in both counters, so a
+minecart container anywhere in the chunk always forces the scan -
+unlike the FlamePaper occlusion-based patches removed in v0.1.16
+which broke minecart hoppers and minecart chests.
+
+Also skips the AxisAlignedBB and result ArrayList allocations when
+the scan is skipped, and behaves identically when the chunk is not
+loaded (the vanilla scan would find nothing there either).
+
+Behind hopper.optimize in dionysus.yml, default false.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index 7d90569b0393b9cdef862300ff64672a45b7f5e4..f671a7fb5ecc416dafffe462941c6582736d3dcf 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -454,4 +454,15 @@ public class DionysusConfig {
+                 worlds schedule thousands of ticks per tick and pay this cost
+                 constantly.""");
+     }
++
++    public static boolean hopperOptimize = false;
++    private static void hopperOptimize() {
++        hopperOptimize = getBoolean("hopper.optimize", hopperOptimize, """
++                Skip the hopper suction entity scan when the scanned entity slices
++                cannot contain a match (item entities or minecart containers are
++                tracked per slice, so the scan is only skipped when provably nothing
++                can be found). Minecart chests and hoppers are always scanned for:
++                unlike an earlier FlamePaper-based attempt removed in v0.1.16, this
++                implementation never skips based on block occlusion.""");
++    }
+ }
+diff --git a/src/main/java/net/minecraft/server/Chunk.java b/src/main/java/net/minecraft/server/Chunk.java
+index 668aeb16dce33abb4c98e3483141951ffbdc8ac5..8fad61fd75215ce4f719f8000e30cb374cd46da9 100644
+--- a/src/main/java/net/minecraft/server/Chunk.java
++++ b/src/main/java/net/minecraft/server/Chunk.java
+@@ -994,6 +994,25 @@ public class Chunk {
+         this.s = true;
+     }
+ 
++    // Dionysus start - hopper suction optimization helper (minecart-safe)
++    // Returns true when any of the given entity slices contains an entity that
++    // IEntitySelector.c could match: EntityItem (itemCounts) or IInventory entities
++    // such as minecart chests/hoppers (inventoryEntityCounts). Only when this returns
++    // false is skipping the hopper entity scan provably equivalent to vanilla.
++    public boolean hasHopperCandidateEntities(int i, int j) {
++        i = MathHelper.clamp(i, 0, this.entitySlices.length - 1);
++        j = MathHelper.clamp(j, 0, this.entitySlices.length - 1);
++
++        for (int k = i; k <= j; ++k) {
++            if (itemCounts[k] > 0 || inventoryEntityCounts[k] > 0) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++    // Dionysus end
++
+     public void a(@Nullable Entity entity, AxisAlignedBB axisalignedbb, List<Entity> list, Predicate<? super Entity> predicate) {
+         int i = MathHelper.floor((axisalignedbb.b - 2.0D) / 16.0D);
+         int j = MathHelper.floor((axisalignedbb.e + 2.0D) / 16.0D);
+diff --git a/src/main/java/net/minecraft/server/TileEntityHopper.java b/src/main/java/net/minecraft/server/TileEntityHopper.java
+index 5198a590a7711f228429c3e83b3722f975dd3e43..e6e4ad34e4126e2e1793f4b2902f23e630ee785d 100644
+--- a/src/main/java/net/minecraft/server/TileEntityHopper.java
++++ b/src/main/java/net/minecraft/server/TileEntityHopper.java
+@@ -5,6 +5,7 @@ import java.util.List;
+ import javax.annotation.Nullable;
+ 
+ // CraftBukkit start
++import dev.pomf.dionysus.DionysusConfig; // Dionysus
+ import org.bukkit.craftbukkit.entity.CraftHumanEntity;
+ import org.bukkit.craftbukkit.inventory.CraftItemStack;
+ import org.bukkit.entity.HumanEntity;
+@@ -729,11 +730,29 @@ public class TileEntityHopper extends TileEntityLootable implements IHopper, ITi
+         }
+ 
+         if (object == null && searchForEntities) { // Paper - only if searchForEntities
+-            List list = world.getEntities((Entity) null, new AxisAlignedBB(d0 - 0.5D, d1 - 0.5D, d2 - 0.5D, d0 + 0.5D, d1 + 0.5D, d2 + 0.5D), IEntitySelector.c);
++            // Dionysus start - skip the entity scan when the scanned slices cannot contain
++            // a match for IEntitySelector.c (EntityItem or IInventory entities such as
++            // minecart chests/hoppers). Paper's per-slice inventoryEntityCounts/itemCounts
++            // make this provably minecart-safe: any minecart container in the chunk keeps
++            // its slice counter > 0, so the scan is never skipped when a minecart could
++            // be found.
++            boolean doEntitySearch = true;
++            if (DionysusConfig.hopperOptimize) {
++                Chunk chunk = world.getChunkIfLoaded(i >> 4, k >> 4);
++                if (chunk == null || !chunk.hasHopperCandidateEntities(
++                        MathHelper.floor((d1 - 2.5D) / 16.0D),
++                        MathHelper.floor((d1 + 2.5D) / 16.0D))) {
++                    doEntitySearch = false;
++                }
++            }
++            if (doEntitySearch) {
++                List list = world.getEntities((Entity) null, new AxisAlignedBB(d0 - 0.5D, d1 - 0.5D, d2 - 0.5D, d0 + 0.5D, d1 + 0.5D, d2 + 0.5D), IEntitySelector.c);
+ 
+-            if (!list.isEmpty()) {
+-                object = (IInventory) list.get(world.random.nextInt(list.size()));
++                if (!list.isEmpty()) {
++                    object = (IInventory) list.get(world.random.nextInt(list.size()));
++                }
+             }
++            // Dionysus end
+         }
+ 
+         return (IInventory) object;

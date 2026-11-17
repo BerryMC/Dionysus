@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+* Add crop and stem growth RNG optimization (`crop.optimize-growth`, default off)
+* Add pathfinding skip when no player is nearby (`pathfinding.optimize`, default off)
+* Add scheduled tick processing optimization (`scheduled-ticks.optimize`, default off)
+* Add minecart-safe hopper suction entity scan skip (`hopper.optimize`, default off)
+
 ## [0.1.18]
 
 * Remove duplicate Add-Sendable-Interface patch

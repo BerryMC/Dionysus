@@ -19,10 +19,10 @@ index 41fea5bbfb4ecf239b88b1f095b07cfe5f76f31b..e76852451f4a332bd4048ab90575fa70
                          // TODO: inventory not updated
                          return false;
 diff --git a/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java b/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java
-index bb3c42a9ec448655e45a26a58fc08f2ae14eed2e..671bbd935432669244847af1550070b56a6c97fd 100644
+index f1a3ca9509ebc50eaa67bf4dac2645f5ee37bbef..1b85e3c4f7d8d7dbc000c00fb337d424c9a8c7e3 100644
 --- a/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java
 +++ b/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java
-@@ -160,15 +160,24 @@ public class CraftEventFactory {
+@@ -156,15 +156,24 @@ public class CraftEventFactory {
      /**
       * Bucket methods
       */
@@ -50,7 +50,7 @@ index bb3c42a9ec448655e45a26a58fc08f2ae14eed2e..671bbd935432669244847af1550070b5
          Player player = (who == null) ? null : (Player) who.getBukkitEntity();
          CraftItemStack itemInHand = CraftItemStack.asNewCraftStack(item);
          Material bucket = CraftMagicNumbers.getMaterial(itemstack.getItem());
-@@ -184,7 +193,7 @@ public class CraftEventFactory {
+@@ -180,7 +189,7 @@ public class CraftEventFactory {
              event = new PlayerBucketFillEvent(player, blockClicked, blockFace, bucket, itemInHand);
              ((PlayerBucketFillEvent) event).setCancelled(!canBuild(craftWorld, player, clickedX, clickedZ));
          } else {

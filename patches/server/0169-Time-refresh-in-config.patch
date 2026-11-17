@@ -5,10 +5,10 @@ Subject: [PATCH] Time-refresh-in-config
 
 
 diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
-index 71e6826180a7566e16aaebbea2f79f3ec75cd659..1f986a7c0407fd78cece25e1388f1b8e6d4b8eef 100644
+index fdbfe87de4f1152adb8c571305dc6d969b41716c..43fcdf35129711b092e872c52a398cb1f823dad9 100644
 --- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
 +++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
-@@ -409,4 +409,12 @@ public class DionysusConfig {
+@@ -414,4 +414,12 @@ public class DionysusConfig {
                          networks is predictable and intuitive rather than locational and chaotic."""
          );
      }
@@ -323,10 +323,10 @@ index 897a49eda09df4654ea31808907cb60c8fa94f77..33f310f4faf69ecb46171e1c05e16dbe
      public void b(EntityPlayer entityplayer, WorldServer worldserver) {
          WorldBorder worldborder = entityplayer.world.getWorldBorder(); // CraftBukkit
 diff --git a/src/main/java/net/minecraft/server/World.java b/src/main/java/net/minecraft/server/World.java
-index cc9f467cc85704d536545aa63985340013e63703..c04cf4cb9b83ca4ea9f8e4561d2dc3150f4df5ab 100644
+index a6e97eb3b57e65abf4399acbec9393bcab1ee2b9..620d41c303a933c571f4ba65c9f72f3c6a89ac61 100644
 --- a/src/main/java/net/minecraft/server/World.java
 +++ b/src/main/java/net/minecraft/server/World.java
-@@ -3077,6 +3077,17 @@ public abstract class World implements IBlockAccess {
+@@ -3080,6 +3080,17 @@ public abstract class World implements IBlockAccess {
  
      public void setDayTime(long i) {
          this.worldData.setDayTime(i);
