@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file.
 * Fix tool break sound being inaudible to the breaking player (upstream #128)
 * Micro-optimizations: position hashCode caching, light-BFS allocation removal, farmland water-scan loops (from Beast)
 * Fix /tpsbar and /rambar refreshing 20x slower than configured
+* Cache path-node type classification in PathfinderNormal (pathfinding hot path)
 
 * Add crop and stem growth RNG optimization (`crop.optimize-growth`, default off)
 * Add pathfinding skip when no player is nearby (`pathfinding.optimize`, default off)
