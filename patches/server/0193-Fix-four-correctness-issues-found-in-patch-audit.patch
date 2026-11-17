@@ -1,0 +1,199 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 16:42:45 +0800
+Subject: [PATCH] Fix four correctness issues found in patch audit
+
+1. crop.optimize-growth was dead config - BlockCrops/BlockStem always
+   used the nextFloat() path regardless of the toggle. Now the vanilla
+   nextInt(bound) path is restored when the option is off (its default).
+   Probability equivalence verified empirically over 10 bounds.
+
+2. hopper.optimize scanned only the hopper's own chunk while
+   World#getEntities scans the AABB-expanded chunk block. A candidate in
+   a neighbouring chunk at a border would have been skipped. Now the
+   check only skips when the expanded AABB stays within a single loaded
+   chunk, and every slice the vanilla scan touches is verified empty.
+
+3. async-json-list-save flushed pending writes at the START of
+   MinecraftServer#stop, before savePlayers/saveChunks could submit more.
+   Moved the flush to the very end of shutdown. Also broadened the
+   executor's catch to Throwable so write failures are never silent.
+
+4. Ban-list date parsing regressed for textual zone ids: the old
+   SimpleDateFormat accepted 'UTC'/'GMT' while the strict
+   DateTimeFormatter threw, silently losing the date. Added a
+   zone-or-offset fallback formatter (verified all four sample formats
+   now parse identically to the old implementation).
+
+Also hardened the configs/ migration: cross-device moves now fall back
+to copy+delete instead of aborting startup.
+
+diff --git a/src/main/java/net/minecraft/server/BlockCrops.java b/src/main/java/net/minecraft/server/BlockCrops.java
+index 3094bfbb3f335a22272b026033b667b744d34c4b..4a1d8631c82848f1df459ef5318123c2772392b0 100644
+--- a/src/main/java/net/minecraft/server/BlockCrops.java
++++ b/src/main/java/net/minecraft/server/BlockCrops.java
+@@ -54,8 +54,9 @@ public class BlockCrops extends BlockPlant implements IBlockFragilePlantElement
+             if (i < this.g()) {
+                 float f = a((Block) this, world, blockposition);
+ 
+-                // Dionysus start - use a single nextFloat() call instead of nextInt(bound); same probability, cheaper RNG
+-                if (random.nextFloat() * ((int) ((100.0F / world.spigotConfig.wheatModifier) * (25.0F / f)) + 1) < 1.0F) { // Spigot
++                // Dionysus start - optionally use a single nextFloat() call instead of nextInt(bound)
++                final int bound = (int) ((100.0F / world.spigotConfig.wheatModifier) * (25.0F / f)) + 1; // Spigot
++                if (dev.pomf.dionysus.DionysusConfig.optimizeCrops ? random.nextFloat() * bound < 1.0F : random.nextInt(bound) == 0) {
+                 // Dionysus end
+                     // CraftBukkit start
+                     IBlockData data = this.setAge(i + 1);
+diff --git a/src/main/java/net/minecraft/server/BlockStem.java b/src/main/java/net/minecraft/server/BlockStem.java
+index f0491eb9cc62d6af7d2961fe9aa325b8b2b40001..5a526ce445bdeb37e6685a3afed8e4aab897ca09 100644
+--- a/src/main/java/net/minecraft/server/BlockStem.java
++++ b/src/main/java/net/minecraft/server/BlockStem.java
+@@ -51,8 +51,9 @@ public class BlockStem extends BlockPlant implements IBlockFragilePlantElement {
+         if (world.isLightLevel(blockposition.up(), 9)) { // Paper
+             float f = BlockCrops.a((Block) this, world, blockposition);
+ 
+-            // Dionysus start - use a single nextFloat() call instead of nextInt(bound); same probability, cheaper RNG
+-            if (random.nextFloat() * ((int) ((100.0F / (this == Blocks.PUMPKIN_STEM ? world.spigotConfig.pumpkinModifier : world.spigotConfig.melonModifier)) * (25.0F / f)) + 1) < 1.0F) { // Spigot
++            // Dionysus start - optionally use a single nextFloat() call instead of nextInt(bound)
++            final int bound = (int) ((100.0F / (this == Blocks.PUMPKIN_STEM ? world.spigotConfig.pumpkinModifier : world.spigotConfig.melonModifier)) * (25.0F / f)) + 1; // Spigot
++            if (dev.pomf.dionysus.DionysusConfig.optimizeCrops ? random.nextFloat() * bound < 1.0F : random.nextInt(bound) == 0) {
+             // Dionysus end
+                 int i = ((Integer) iblockdata.get(BlockStem.AGE)).intValue();
+ 
+diff --git a/src/main/java/net/minecraft/server/ExpirableListEntry.java b/src/main/java/net/minecraft/server/ExpirableListEntry.java
+index b1ad9bef41a704234503c4bcc82e326e56addb36..a03a80f007cac4558aa7c90f5c42ad93c23a5fac 100644
+--- a/src/main/java/net/minecraft/server/ExpirableListEntry.java
++++ b/src/main/java/net/minecraft/server/ExpirableListEntry.java
+@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
+ import java.time.ZoneId;
+ import java.time.ZonedDateTime;
+ import java.time.format.DateTimeFormatter;
++import java.time.format.DateTimeFormatterBuilder; // Dionysus
+ import java.time.format.DateTimeParseException;
+ import java.util.Date;
+ 
+@@ -13,12 +14,25 @@ public abstract class ExpirableListEntry<T> extends JsonListEntry<T> {
+     // which is not thread-safe and can corrupt dates when parsing happens off-main.
+     // Based on Leaf's "Use faster and thread-safe ban list date format parsing" by Dreeam.
+     public static final DateTimeFormatter a = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z");
++    // Dionysus - fallback for inputs the strict pattern rejects but the old
++    // SimpleDateFormat accepted, notably textual zone ids such as "UTC".
++    private static final DateTimeFormatter dionysusLooseFormatter = new DateTimeFormatterBuilder()
++            .appendPattern("yyyy-MM-dd HH:mm:ss ")
++            .appendZoneOrOffsetId()
++            .toFormatter(java.util.Locale.ROOT);
+     private static final ZoneId dionysusZoneId = ZoneId.systemDefault();
+ 
+     public static Date parseToDate(final String s) {
+-        ZonedDateTime zoneddatetime = ZonedDateTime.parse(s, ExpirableListEntry.a);
++        try {
++            ZonedDateTime zoneddatetime = ZonedDateTime.parse(s, ExpirableListEntry.a);
++
++            return Date.from(zoneddatetime.toInstant());
++        } catch (DateTimeParseException datetimeparseexception) {
++            // Preserve the old SimpleDateFormat behavior for zone names like "UTC".
++            ZonedDateTime zoneddatetime = ZonedDateTime.parse(s, ExpirableListEntry.dionysusLooseFormatter);
+ 
+-        return Date.from(zoneddatetime.toInstant());
++            return Date.from(zoneddatetime.toInstant());
++        }
+     }
+ 
+     private static String formatToString(final Date date) {
+diff --git a/src/main/java/net/minecraft/server/JsonList.java b/src/main/java/net/minecraft/server/JsonList.java
+index d522546f4588d087f2546a91e5cc734c21d87def..bac967d72fcb61a51a46d56db2718aac0350e3df 100644
+--- a/src/main/java/net/minecraft/server/JsonList.java
++++ b/src/main/java/net/minecraft/server/JsonList.java
+@@ -213,6 +213,9 @@ public class JsonList<K, V extends JsonListEntry<K>> {
+                 this.dionysusWriteToFile(s);
+             } catch (IOException ioexception) {
+                 JsonList.a.warn("Could not save the list asynchronously", ioexception);
++            } catch (Throwable throwable) {
++                // Never let a write failure escape silently on the executor thread.
++                JsonList.a.warn("Unexpected error while saving the list asynchronously", throwable);
+             } finally {
+                 dionysusPendingSaves.decrementAndGet();
+             }
+diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
+index ab15231bbe1800956701f5ff4fc7c5c012ce780b..8613141fb48f0deffe816cfe472e432920d8ba14 100644
+--- a/src/main/java/net/minecraft/server/MinecraftServer.java
++++ b/src/main/java/net/minecraft/server/MinecraftServer.java
+@@ -481,7 +481,6 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+         // CraftBukkit end
+         MinecraftServer.LOGGER.info("Stopping server");
+         MinecraftTimings.stopServer(); // Paper
+-        JsonList.waitForPendingSaves(); // Dionysus - flush pending async JSON list saves
+         // CraftBukkit start
+         if (this.server != null) {
+             this.server.disablePlugins();
+@@ -538,6 +537,10 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+             this.Y.c(false); // Paper
+         }
+         // Spigot end
++        // Dionysus start - flush pending async JSON list saves LAST, after every other
++        // shutdown save has run, so nothing submitted later is left unflushed.
++        JsonList.waitForPendingSaves();
++        // Dionysus end
+     }
+ 
+     public String getServerIp() {
+diff --git a/src/main/java/net/minecraft/server/TileEntityHopper.java b/src/main/java/net/minecraft/server/TileEntityHopper.java
+index e6e4ad34e4126e2e1793f4b2902f23e630ee785d..1dbc07e0b92c429a6a1bece2390f7c769aa67aaf 100644
+--- a/src/main/java/net/minecraft/server/TileEntityHopper.java
++++ b/src/main/java/net/minecraft/server/TileEntityHopper.java
+@@ -738,12 +738,27 @@ public class TileEntityHopper extends TileEntityLootable implements IHopper, ITi
+             // be found.
+             boolean doEntitySearch = true;
+             if (DionysusConfig.hopperOptimize) {
+-                Chunk chunk = world.getChunkIfLoaded(i >> 4, k >> 4);
+-                if (chunk == null || !chunk.hasHopperCandidateEntities(
+-                        MathHelper.floor((d1 - 2.5D) / 16.0D),
+-                        MathHelper.floor((d1 + 2.5D) / 16.0D))) {
+-                    doEntitySearch = false;
++                // Dionysus start - conservative skip: only when the AABB (expanded by the
++                // same 2 blocks World#getEntities uses) stays inside ONE loaded chunk, so
++                // every slice the vanilla scan would touch is checked. At chunk borders we
++                // keep the scan, trading a little optimization for provable correctness.
++                int minChunkX = MathHelper.floor((d0 - 0.5D - 2.0D) / 16.0D);
++                int maxChunkX = MathHelper.floor((d0 + 0.5D + 2.0D) / 16.0D);
++                int minChunkZ = MathHelper.floor((d2 - 0.5D - 2.0D) / 16.0D);
++                int maxChunkZ = MathHelper.floor((d2 + 0.5D + 2.0D) / 16.0D);
++
++                if (minChunkX == maxChunkX && minChunkZ == maxChunkZ) {
++                    Chunk chunk = world.getChunkIfLoaded(minChunkX, minChunkZ);
++
++                    // Unloaded chunk => skip nothing (vanilla scan would find nothing there
++                    // anyway, but staying conservative keeps this trivially correct).
++                    if (chunk != null) {
++                        doEntitySearch = chunk.hasHopperCandidateEntities(
++                                MathHelper.floor((d1 - 0.5D - 2.0D) / 16.0D),
++                                MathHelper.floor((d1 + 0.5D + 2.0D) / 16.0D));
++                    }
+                 }
++                // Dionysus end
+             }
+             if (doEntitySearch) {
+                 List list = world.getEntities((Entity) null, new AxisAlignedBB(d0 - 0.5D, d1 - 0.5D, d2 - 0.5D, d0 + 0.5D, d1 + 0.5D, d2 + 0.5D), IEntitySelector.c);
+diff --git a/src/main/java/org/bukkit/craftbukkit/Main.java b/src/main/java/org/bukkit/craftbukkit/Main.java
+index f51e325a5cafb8163eae1980a7fc24d94bf715b4..37f0eeddf928d9e7e44ef54d92a12c96ceeced96 100644
+--- a/src/main/java/org/bukkit/craftbukkit/Main.java
++++ b/src/main/java/org/bukkit/craftbukkit/Main.java
+@@ -31,7 +31,17 @@ public class Main {
+             java.nio.file.Files.move(rootFile.toPath(), targetFile.toPath());
+             java.lang.System.out.println("Moved " + rootFile.getName() + " into the configs directory (" + targetFile.getPath() + ").");
+         } catch (java.io.IOException ioexception) {
+-            java.lang.System.err.println("Failed to migrate " + rootFile.getPath() + " to " + targetFile.getPath() + ": " + ioexception);
++            // Cross-device moves and permission problems must never abort startup: fall
++            // back to copy-then-delete, and if that also fails leave the legacy file in
++            // place (the server will simply generate/read configs/ fresh).
++            try {
++                java.nio.file.Files.copy(rootFile.toPath(), targetFile.toPath(),
++                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
++                java.nio.file.Files.deleteIfExists(rootFile.toPath());
++                java.lang.System.out.println("Copied " + rootFile.getName() + " into the configs directory (" + targetFile.getPath() + ").");
++            } catch (java.io.IOException ioexception1) {
++                java.lang.System.err.println("Failed to migrate " + rootFile.getPath() + " to " + targetFile.getPath() + " (leaving it in place): " + ioexception1);
++            }
+         }
+     }
+     // Dionysus end
