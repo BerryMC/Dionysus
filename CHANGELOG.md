@@ -7,6 +7,8 @@ All notable changes to this project will be documented in this file.
 
 * Update netty to 4.1.141.Final (CVE fixes, JDK 21+ compatibility)
 * Add opt-in io_uring transport support (use-io-uring in dionysus.yml, default off)
+* Organize config files under a configs directory (Sponge-style, with one-time automatic migration)
+* Strengthen use-io-uring config warning
 
 * Add crop and stem growth RNG optimization (`crop.optimize-growth`, default off)
 * Add pathfinding skip when no player is nearby (`pathfinding.optimize`, default off)

@@ -1,0 +1,138 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 11:33:40 +0800
+Subject: [PATCH] Organize config files under a configs directory
+
+Adopt the Sponge-style layout: bukkit.yml, spigot.yml, paper.yml,
+commands.yml, help.yml and dionysus.yml all live under configs/ now.
+
+- The jopt defaults for --bukkit-settings/--commands-settings/
+  --spigot-settings/--paper-settings point into configs/, so admins
+  can still override any file location via CLI flags.
+- HelpYamlReader and DionysusConfig read their files from configs/.
+- On startup, root-level files with the default names are MOVED into
+  configs/ (one-time migration). Migration only runs when the matching
+  CLI flag was not given and only when the target does not already
+  exist, so custom layouts and CLI overrides are untouched.
+
+server.properties, eula.txt, log4j2.xml and the JSON data files
+(ops/whitelist/bans/usercache) stay at the root as before, and the
+permissions.yml location remains configurable through bukkit.yml's
+settings.permissions-file.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index 124af3df0e41dc56e6d7630df788d2e0568b7a02..f853ccd9f88a42c92de395dc2cef905c38554619 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -59,7 +59,7 @@ public class DionysusConfig {
+     }
+ 
+     public static void load() throws IOException {
+-        File configFile = new File("dionysus.yml");
++        File configFile = new File("configs/dionysus.yml"); // Dionysus - configs directory
+ 
+         if (configFile.exists()) {
+             try {
+diff --git a/src/main/java/org/bukkit/craftbukkit/Main.java b/src/main/java/org/bukkit/craftbukkit/Main.java
+index 21b2c51bba1b7ab1f2fd8126ebc9cd4faccb90b0..f51e325a5cafb8163eae1980a7fc24d94bf715b4 100644
+--- a/src/main/java/org/bukkit/craftbukkit/Main.java
++++ b/src/main/java/org/bukkit/craftbukkit/Main.java
+@@ -20,6 +20,22 @@ public class Main {
+     public static boolean useJline = true;
+     public static boolean useConsole = true;
+ 
++    // Dionysus start - Sponge-style configs directory migration helper
++    private static void migrateConfig(File rootFile, File targetFile) {
++        if (!rootFile.exists() || targetFile.exists()) {
++            return;
++        }
++
++        try {
++            java.nio.file.Files.createDirectories(targetFile.toPath().getParent());
++            java.nio.file.Files.move(rootFile.toPath(), targetFile.toPath());
++            java.lang.System.out.println("Moved " + rootFile.getName() + " into the configs directory (" + targetFile.getPath() + ").");
++        } catch (java.io.IOException ioexception) {
++            java.lang.System.err.println("Failed to migrate " + rootFile.getPath() + " to " + targetFile.getPath() + ": " + ioexception);
++        }
++    }
++    // Dionysus end
++
+     public static void main(String[] args) {
+         // Todo: Installation script
+         if (System.getProperty("jdk.nio.maxCachedBufferSize") == null) System.setProperty("jdk.nio.maxCachedBufferSize", "262144"); // Paper - cap per-thread NIO cache size
+@@ -103,13 +119,13 @@ public class Main {
+                 acceptsAll(asList("b", "bukkit-settings"), "File for bukkit settings")
+                         .withRequiredArg()
+                         .ofType(File.class)
+-                        .defaultsTo(new File("bukkit.yml"))
++                        .defaultsTo(new File("configs/bukkit.yml"))
+                         .describedAs("Yml file");
+ 
+                 acceptsAll(asList("C", "commands-settings"), "File for command settings")
+                         .withRequiredArg()
+                         .ofType(File.class)
+-                        .defaultsTo(new File("commands.yml"))
++                        .defaultsTo(new File("configs/commands.yml"))
+                         .describedAs("Yml file");
+ 
+                 acceptsAll(asList("nojline"), "Disables jline and emulates the vanilla console");
+@@ -124,7 +140,7 @@ public class Main {
+                 acceptsAll(asList("S", "spigot-settings"), "File for spigot settings")
+                         .withRequiredArg()
+                         .ofType(File.class)
+-                        .defaultsTo(new File("spigot.yml"))
++                        .defaultsTo(new File("configs/spigot.yml"))
+                         .describedAs("Yml file");
+                 // Spigot End
+ 
+@@ -132,7 +148,7 @@ public class Main {
+                 acceptsAll(asList("paper", "paper-settings"), "File for paper settings")
+                         .withRequiredArg()
+                         .ofType(File.class)
+-                        .defaultsTo(new File("paper.yml"))
++                        .defaultsTo(new File("configs/paper.yml"))
+                         .describedAs("Yml file");
+                 // Paper end
+ 
+@@ -162,6 +178,28 @@ public class Main {
+             Logger.getLogger(Main.class.getName()).log(Level.SEVERE, ex.getLocalizedMessage());
+         }
+ 
++        // Dionysus start - migrate root-level config files into the configs directory
++        // (Sponge-style layout). Only runs when the admin did not override the file
++        // location on the command line, and only moves a file when the target does
++        // not exist yet, so custom layouts are never touched or overwritten.
++        if (options != null && !options.has("?")) {
++            if (!options.has("bukkit-settings")) {
++                migrateConfig(new File("bukkit.yml"), new File("configs/bukkit.yml"));
++            }
++            if (!options.has("commands-settings")) {
++                migrateConfig(new File("commands.yml"), new File("configs/commands.yml"));
++            }
++            if (!options.has("spigot-settings")) {
++                migrateConfig(new File("spigot.yml"), new File("configs/spigot.yml"));
++            }
++            if (!options.has("paper-settings")) {
++                migrateConfig(new File("paper.yml"), new File("configs/paper.yml"));
++            }
++            migrateConfig(new File("help.yml"), new File("configs/help.yml"));
++            migrateConfig(new File("dionysus.yml"), new File("configs/dionysus.yml"));
++        }
++        // Dionysus end
++
+         if ((options == null) || (options.has("?"))) {
+             try {
+                 parser.printHelpOn(System.out);
+diff --git a/src/main/java/org/bukkit/craftbukkit/help/HelpYamlReader.java b/src/main/java/org/bukkit/craftbukkit/help/HelpYamlReader.java
+index 60a6221b4f5ff0499ca101dfd4ea762368b31b94..326e2ae2b50de25b994189da89f128b517f81508 100644
+--- a/src/main/java/org/bukkit/craftbukkit/help/HelpYamlReader.java
++++ b/src/main/java/org/bukkit/craftbukkit/help/HelpYamlReader.java
+@@ -27,7 +27,7 @@ public class HelpYamlReader {
+     public HelpYamlReader(Server server) {
+         this.server = server;
+ 
+-        File helpYamlFile = new File("help.yml");
++        File helpYamlFile = new File("configs/help.yml"); // Dionysus - configs directory
+         YamlConfiguration defaultConfig = YamlConfiguration.loadConfiguration(new InputStreamReader(getClass().getClassLoader().getResourceAsStream("configurations/help.yml"), Charsets.UTF_8));
+ 
+         try {

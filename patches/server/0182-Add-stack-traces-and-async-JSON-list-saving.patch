@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: BerryMC <BerryMC@users.noreply.github.com>
-Date: Tue, 17 Nov 2026 02:51:31 +0800
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 11:33:40 +0800
 Subject: [PATCH] Add stack traces and async JSON list saving
 
 - Print the worker thread stack trace when a plugin leaves async

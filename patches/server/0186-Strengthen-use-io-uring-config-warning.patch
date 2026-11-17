@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 11:33:40 +0800
+Subject: [PATCH] Strengthen use-io-uring config warning
+
+Lead the comment with 'DO NOT ENABLE THIS IF YOU DON'T KNOW WHAT IT
+IS.' and explain the risks (experimental transport, plugin channel
+assumptions) more explicitly.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index dbddd67c98dd370434c567522f3a53d0811c5e09..124af3df0e41dc56e6d7630df788d2e0568b7a02 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -485,9 +485,11 @@ public class DionysusConfig {
+     public static boolean useIoUring = false;
+     private static void useIoUring() {
+         useIoUring = getBoolean("use-io-uring", useIoUring, """
+-                Use netty's io_uring transport on Linux instead of epoll (requires a
+-                kernel with io_uring support; the native library is bundled).
+-                Experimental: this changes the socket channel implementation that
+-                packet-manipulation plugins like ProtocolLib may assume. Default off.""");
++                DO NOT ENABLE THIS IF YOU DON'T KNOW WHAT IT IS.
++                Switches netty to the experimental io_uring transport on Linux instead
++                of epoll (requires a kernel with io_uring support; the native library
++                is bundled). This changes the socket channel implementation that
++                packet-manipulation plugins like ProtocolLib may assume, and io_uring
++                itself is far less battle-tested than epoll. Default off.""");
+     }
+ }

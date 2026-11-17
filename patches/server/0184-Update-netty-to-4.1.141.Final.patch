@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: BerryMC <BerryMC@users.noreply.github.com>
-Date: Tue, 17 Nov 2026 09:47:32 +0800
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 11:33:40 +0800
 Subject: [PATCH] Update netty to 4.1.141.Final
 
 Bump netty-all from 4.1.77.Final (early 2022) to the latest 4.1.x
