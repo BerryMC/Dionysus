@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 11:04:17 +0800
+Subject: [PATCH] Add opt-in io_uring transport support
+
+Add the netty incubator io_uring transport as an optional server
+channel type on Linux: when use-io-uring is enabled in dionysus.yml
+(default false) and io.netty.incubator.channel.uring.IOUring is
+available (kernel io_uring support + bundled native library), the
+ServerBootstrap uses IOUringServerSocketChannel with a dedicated
+IOUringEventLoopGroup instead of epoll/NIO.
+
+Based on Leaf's 'Add io_uring support', adapted to netty 4.1's
+incubator artifact (io.netty.incubator.channel.uring) rather than
+netty 4.2's mainline io_uring. The native library is bundled for
+linux-x86_64 and linux-aarch64. Experimental: packet-manipulation
+plugins may assume the epoll channel type, so this defaults off.
+
+diff --git a/pom.xml b/pom.xml
+index 6e559977dfbabcbbe8ecf82b0dd9af654ee7c2ed..d1103829c5b95550458f85f5ce4c56ab6f1547c3 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -38,6 +38,28 @@
+             <version>4.1.141.Final</version>
+             <scope>compile</scope>
+         </dependency>
++        <!-- io_uring transport, opt-in via dionysus.yml use-io-uring (Dionysus start) -->
++        <dependency>
++            <groupId>io.netty.incubator</groupId>
++            <artifactId>netty-incubator-transport-classes-io_uring</artifactId>
++            <version>0.0.26.Final</version>
++            <scope>compile</scope>
++        </dependency>
++        <dependency>
++            <groupId>io.netty.incubator</groupId>
++            <artifactId>netty-incubator-transport-native-io_uring</artifactId>
++            <version>0.0.26.Final</version>
++            <classifier>linux-x86_64</classifier>
++            <scope>runtime</scope>
++        </dependency>
++        <dependency>
++            <groupId>io.netty.incubator</groupId>
++            <artifactId>netty-incubator-transport-native-io_uring</artifactId>
++            <version>0.0.26.Final</version>
++            <classifier>linux-aarch_64</classifier>
++            <scope>runtime</scope>
++        </dependency>
++        <!-- Dionysus end -->
+         <dependency>
+             <groupId>dev.pomf.dionysus</groupId>
+             <artifactId>dionysus-api</artifactId>
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index c7561700565bf72b1b7bd3405d3258df8b397dc5..dbddd67c98dd370434c567522f3a53d0811c5e09 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -481,4 +481,13 @@ public class DionysusConfig {
+                 in some other forks. NOTE: this changes vanilla combat behavior and
+                 is enabled by default.""");
+     }
++
++    public static boolean useIoUring = false;
++    private static void useIoUring() {
++        useIoUring = getBoolean("use-io-uring", useIoUring, """
++                Use netty's io_uring transport on Linux instead of epoll (requires a
++                kernel with io_uring support; the native library is bundled).
++                Experimental: this changes the socket channel implementation that
++                packet-manipulation plugins like ProtocolLib may assume. Default off.""");
++    }
+ }
+diff --git a/src/main/java/net/minecraft/server/ServerConnection.java b/src/main/java/net/minecraft/server/ServerConnection.java
+index 098c51675e8b0a0543676797d1abc4b6769c30d7..ed4102157782a6c6a45ec5f737645bd27f770067 100644
+--- a/src/main/java/net/minecraft/server/ServerConnection.java
++++ b/src/main/java/net/minecraft/server/ServerConnection.java
+@@ -21,6 +21,11 @@ import io.netty.channel.epoll.EpollServerSocketChannel;
+ import io.netty.channel.local.LocalEventLoopGroup;
+ import io.netty.channel.nio.NioEventLoopGroup;
+ import io.netty.channel.socket.nio.NioServerSocketChannel;
++// Dionysus start - io_uring transport support
++import io.netty.incubator.channel.uring.IOUring;
++import io.netty.incubator.channel.uring.IOUringEventLoopGroup;
++import io.netty.incubator.channel.uring.IOUringServerSocketChannel;
++// Dionysus end
+ import io.netty.handler.flush.FlushConsolidationHandler;
+ import io.netty.handler.timeout.ReadTimeoutHandler;
+ import io.netty.util.concurrent.Future;
+@@ -88,6 +93,17 @@ public class ServerConnection {
+             return this.a();
+         }
+     };
++    // Dionysus start - io_uring transport support (opt-in)
++    public static final LazyInitVar<IOUringEventLoopGroup> ioUring = new LazyInitVar() {
++        protected IOUringEventLoopGroup a() {
++            return new IOUringEventLoopGroup(0, (new ThreadFactoryBuilder()).setNameFormat("Netty IOUring Server IO #%d").setDaemon(true).build());
++        }
++
++        protected Object init() {
++            return this.a();
++        }
++    };
++    // Dionysus end
+     public static final LazyInitVar<LocalEventLoopGroup> c = new LazyInitVar() {
+         protected LocalEventLoopGroup a() {
+             return new LocalEventLoopGroup(0, (new ThreadFactoryBuilder()).setNameFormat("Netty Local Server IO #%d").setDaemon(true).build());
+@@ -125,7 +141,13 @@ public class ServerConnection {
+             Class oclass;
+             LazyInitVar lazyinitvar;
+ 
+-            if (Epoll.isAvailable() && this.f.af()) {
++            // Dionysus start - io_uring transport support (opt-in via dionysus.yml use-io-uring)
++            if (DionysusConfig.useIoUring && IOUring.isAvailable() && this.f.af()) {
++                oclass = IOUringServerSocketChannel.class;
++                lazyinitvar = ServerConnection.ioUring;
++                ServerConnection.e.info("Using io_uring channel type");
++            } else if (Epoll.isAvailable() && this.f.af()) {
++            // Dionysus end
+                 oclass = EpollServerSocketChannel.class;
+                 lazyinitvar = ServerConnection.b;
+                 ServerConnection.e.info("Using epoll channel type");
