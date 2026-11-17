@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 02:41:21 +0800
+Subject: [PATCH] Use thread-safe DateTimeFormatter for ban list dates
+
+Replace the static SimpleDateFormat in ExpirableListEntry with a
+DateTimeFormatter plus parseToDate/formatToString helpers, and adapt
+NameReferencingFileConverter's date parsing. SimpleDateFormat is not
+thread-safe: concurrent parse calls (e.g. JSON list loading off-main)
+can corrupt each other's internal state and crash the server.
+
+DateTimeFormatter is also measurably faster (see Leaf's benchmarks:
+~13s vs ~29s for 10M parses). The 'yyyy-MM-dd HH:mm:ss Z' wire format
+of banned-players.json / ops.json etc. is unchanged.
+
+Based on Leaf's 'Use faster and thread-safe ban list date format
+parsing' by Dreeam.
+
+diff --git a/src/main/java/net/minecraft/server/ExpirableListEntry.java b/src/main/java/net/minecraft/server/ExpirableListEntry.java
+index e643741f01a0f7e27af727c7a22530fe17a7975d..b1ad9bef41a704234503c4bcc82e326e56addb36 100644
+--- a/src/main/java/net/minecraft/server/ExpirableListEntry.java
++++ b/src/main/java/net/minecraft/server/ExpirableListEntry.java
+@@ -1,13 +1,30 @@
+ package net.minecraft.server;
+ 
+ import com.google.gson.JsonObject;
+-import java.text.ParseException;
+-import java.text.SimpleDateFormat;
++import java.time.ZoneId;
++import java.time.ZonedDateTime;
++import java.time.format.DateTimeFormatter;
++import java.time.format.DateTimeParseException;
+ import java.util.Date;
+ 
+ public abstract class ExpirableListEntry<T> extends JsonListEntry<T> {
+ 
+-    public static final SimpleDateFormat a = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
++    // Dionysus start - use a thread-safe DateTimeFormatter instead of SimpleDateFormat,
++    // which is not thread-safe and can corrupt dates when parsing happens off-main.
++    // Based on Leaf's "Use faster and thread-safe ban list date format parsing" by Dreeam.
++    public static final DateTimeFormatter a = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z");
++    private static final ZoneId dionysusZoneId = ZoneId.systemDefault();
++
++    public static Date parseToDate(final String s) {
++        ZonedDateTime zoneddatetime = ZonedDateTime.parse(s, ExpirableListEntry.a);
++
++        return Date.from(zoneddatetime.toInstant());
++    }
++
++    private static String formatToString(final Date date) {
++        return ExpirableListEntry.a.format(date.toInstant().atZone(dionysusZoneId));
++    }
++    // Dionysus end
+     protected final Date b;
+     protected final String c;
+     protected final Date d;
+@@ -27,8 +44,8 @@ public abstract class ExpirableListEntry<T> extends JsonListEntry<T> {
+         Date date;
+ 
+         try {
+-            date = jsonobject.has("created") ? ExpirableListEntry.a.parse(jsonobject.get("created").getAsString()) : new Date();
+-        } catch (ParseException parseexception) {
++            date = jsonobject.has("created") ? ExpirableListEntry.parseToDate(jsonobject.get("created").getAsString()) : new Date(); // Dionysus - thread-safe parsing
++        } catch (DateTimeParseException datetimeparseexception) {
+             date = new Date();
+         }
+ 
+@@ -38,8 +55,8 @@ public abstract class ExpirableListEntry<T> extends JsonListEntry<T> {
+         Date date1;
+ 
+         try {
+-            date1 = jsonobject.has("expires") ? ExpirableListEntry.a.parse(jsonobject.get("expires").getAsString()) : null;
+-        } catch (ParseException parseexception1) {
++            date1 = jsonobject.has("expires") ? ExpirableListEntry.parseToDate(jsonobject.get("expires").getAsString()) : null; // Dionysus - thread-safe parsing
++        } catch (DateTimeParseException datetimeparseexception1) {
+             date1 = null;
+         }
+ 
+@@ -60,9 +77,9 @@ public abstract class ExpirableListEntry<T> extends JsonListEntry<T> {
+     }
+ 
+     protected void a(JsonObject jsonobject) {
+-        jsonobject.addProperty("created", ExpirableListEntry.a.format(this.b));
++        jsonobject.addProperty("created", ExpirableListEntry.formatToString(this.b)); // Dionysus - thread-safe formatting
+         jsonobject.addProperty("source", this.c);
+-        jsonobject.addProperty("expires", this.d == null ? "forever" : ExpirableListEntry.a.format(this.d));
++        jsonobject.addProperty("expires", this.d == null ? "forever" : ExpirableListEntry.formatToString(this.d)); // Dionysus - thread-safe formatting
+         jsonobject.addProperty("reason", this.e);
+     }
+ 
+@@ -79,8 +96,8 @@ public abstract class ExpirableListEntry<T> extends JsonListEntry<T> {
+         Date expires = null;
+ 
+         try {
+-            expires = jsonobject.has("expires") ? a.parse(jsonobject.get("expires").getAsString()) : null;
+-        } catch (ParseException ex) {
++            expires = jsonobject.has("expires") ? ExpirableListEntry.parseToDate(jsonobject.get("expires").getAsString()) : null; // Dionysus - thread-safe parsing
++        } catch (DateTimeParseException ex) {
+             // Guess we don't have a date
+         }
+ 
+diff --git a/src/main/java/net/minecraft/server/NameReferencingFileConverter.java b/src/main/java/net/minecraft/server/NameReferencingFileConverter.java
+index 8f3b93dc1b269fd07b8bda1e45020722d3411c94..5c728441be3dca408fb24d871d8c9d5b79e0c497 100644
+--- a/src/main/java/net/minecraft/server/NameReferencingFileConverter.java
++++ b/src/main/java/net/minecraft/server/NameReferencingFileConverter.java
+@@ -15,7 +15,7 @@ import java.io.File;
+ import java.io.FileNotFoundException;
+ import java.io.IOException;
+ import java.nio.charset.StandardCharsets;
+-import java.text.ParseException;
++import java.time.format.DateTimeParseException; // Dionysus
+ import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Date;
+@@ -519,8 +519,8 @@ public class NameReferencingFileConverter {
+         Date date1;
+ 
+         try {
+-            date1 = ExpirableListEntry.a.parse(s);
+-        } catch (ParseException parseexception) {
++            date1 = ExpirableListEntry.parseToDate(s); // Dionysus - thread-safe parsing
++        } catch (DateTimeParseException datetimeparseexception) {
+             date1 = date;
+         }
+ 

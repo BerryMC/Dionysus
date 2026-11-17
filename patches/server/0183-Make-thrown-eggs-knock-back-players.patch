@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 02:51:45 +0800
+Subject: [PATCH] Make thrown eggs knock back players
+
+Apply 0.4-strength knockback to a hit EntityHuman after the (zero
+damage) egg impact, using the vanilla knockback path so knockback
+resistance attributes are respected.
+
+NOTE: this is enabled by default and changes vanilla combat feel;
+disable with egg-can-knockback: false in dionysus.yml.
+
+Based on Leaf's 'Polpot - Make egg and snowball can knockback player'.
+Snowballs are a binary-only class in 1.12.2 and cannot be patched, so
+this covers eggs only.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index 63b123dba333fe1786bc1018221d2dc7796f25a9..c7561700565bf72b1b7bd3405d3258df8b397dc5 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -473,4 +473,12 @@ public class DionysusConfig {
+                 still built on the main thread, only the file write is offloaded, and
+                 pending saves are flushed when the server stops.""");
+     }
++
++    public static boolean eggCanKnockback = true;
++    private static void eggCanKnockback() {
++        eggCanKnockback = getBoolean("egg-can-knockback", eggCanKnockback, """
++                Thrown eggs knock back players on hit (0.4 strength), like snowballs
++                in some other forks. NOTE: this changes vanilla combat behavior and
++                is enabled by default.""");
++    }
+ }
+diff --git a/src/main/java/net/minecraft/server/EntityEgg.java b/src/main/java/net/minecraft/server/EntityEgg.java
+index 08131afc961fc7834ea0347e2220487bdfca1c63..3e669e846b83766e77f7277b1af9aa0ab2af6aba 100644
+--- a/src/main/java/net/minecraft/server/EntityEgg.java
++++ b/src/main/java/net/minecraft/server/EntityEgg.java
+@@ -1,6 +1,7 @@
+ package net.minecraft.server;
+ 
+ // CraftBukkit start
++import dev.pomf.dionysus.DionysusConfig; // Dionysus
+ import org.bukkit.entity.Ageable;
+ import org.bukkit.entity.EntityType;
+ import org.bukkit.entity.Player;
+@@ -28,6 +29,14 @@ public class EntityEgg extends EntityProjectile {
+     protected void a(MovingObjectPosition movingobjectposition) {
+         if (movingobjectposition.entity != null) {
+             movingobjectposition.entity.damageEntity(DamageSource.projectile(this, this.getShooter()), 0.0F);
++
++            // Dionysus start - eggs can knock back players; based on Leaf's
++            // "Polpot - Make egg and snowball can knockback player". Snowballs are a
++            // binary-only class in 1.12.2 and cannot be patched, so this covers eggs.
++            if (!this.world.isClientSide && DionysusConfig.eggCanKnockback && movingobjectposition.entity instanceof EntityHuman) {
++                ((EntityHuman) movingobjectposition.entity).a((Entity) this, 0.4F, this.locX - movingobjectposition.entity.locX, this.locZ - movingobjectposition.entity.locZ);
++            }
++            // Dionysus end
+         }
+ 
+         if (!this.world.isClientSide) {

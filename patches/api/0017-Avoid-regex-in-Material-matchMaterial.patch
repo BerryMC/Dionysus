@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 02:55:10 +0800
+Subject: [PATCH] Avoid regex in Material#matchMaterial
+
+Replace the replaceAll("\\s+", "_").replaceAll("\\W", "") chain with a
+hand-rolled character loop (matchMaterialStrip). Whitespace runs
+collapse to a single underscore exactly like the old \\s+ pattern,
+lowercase letters are uppercased inline and other non-word characters
+are dropped - all without compiling two regexes on every lookup.
+
+Based on Leaf's 'Avoid regex in Material#matchMaterial'.
+
+diff --git a/src/main/java/org/bukkit/Material.java b/src/main/java/org/bukkit/Material.java
+index fcc76e190244c64843ffa9ad9a1a07f510202008..d245409dead597ace3ecca40193d88e095482395 100644
+--- a/src/main/java/org/bukkit/Material.java
++++ b/src/main/java/org/bukkit/Material.java
+@@ -748,13 +748,57 @@ public enum Material {
+         if (result == null) {
+             String filtered = name.toUpperCase(java.util.Locale.ENGLISH);
+ 
+-            filtered = filtered.replaceAll("\\s+", "_").replaceAll("\\W", "");
++            filtered = matchMaterialStrip(filtered); // Dionysus - avoid regex
+             result = BY_NAME.get(filtered);
+         }
+ 
+         return result;
+     }
+ 
++    // Dionysus start - avoid regex in Material#matchMaterial; based on Leaf's
++    // "Avoid regex in Material#matchMaterial". Keeps whitespace runs as a single
++    // underscore (like the old \\s+ pattern) and drops other non-word characters
++    // without compiling a regex on every lookup.
++    private static String matchMaterialStrip(final String filtered) {
++        final int len = filtered.length();
++        char[] buf = null;
++        int w = 0;
++        for (int i = 0; i < len; i++) {
++            final char c = filtered.charAt(i);
++
++            if ((char) (c - 'A') <= 25 || (char) (c - '0') <= 9 || c == '_') {
++                if (buf == null) {
++                    continue;
++                }
++                buf[w++] = c;
++                continue;
++            }
++            if (buf == null) {
++                buf = new char[len];
++                filtered.getChars(0, i, buf, 0);
++                w = i;
++            }
++            if ((char) (c - 'a') <= 25) {
++                buf[w++] = (char) (c - 32);
++                continue;
++            }
++            if (isMatchMaterialWhitespace(c)) {
++                if (i == 0 || !isMatchMaterialWhitespace(filtered.charAt(i - 1))) {
++                    buf[w++] = '_';
++                }
++            }
++        }
++        if (buf == null) {
++            return filtered;
++        }
++        return new String(buf, 0, w);
++    }
++
++    private static boolean isMatchMaterialWhitespace(final char c) {
++        return c == ' ' || c == '\t' || c == '\n' || c == 0x0B || c == '\f' || c == '\r';
++    }
++    // Dionysus end
++
+     static {
+         for (Material material : values()) {
+             if (byId.length > material.id) {

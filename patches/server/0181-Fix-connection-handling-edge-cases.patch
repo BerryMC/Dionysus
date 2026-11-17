@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 02:44:35 +0800
+Subject: [PATCH] Fix connection handling edge cases
+
+Two small fixes ported from Gale/Leaf:
+
+- Do not respond to status pings before the protocol version is known
+  (ServerPing.ServerData is only set once the server starts ticking),
+  so clients no longer see 'outdated server' while the server is
+  still booting. Based on Gale/Purpur 'Fix outdated server showing
+  in ping before server fully boots'.
+
+- Do not execute player commands after the server has stopped: the
+  chat packet handler already guards on isStopped(), but commands
+  dispatched through handleCommand could still run during shutdown.
+  Based on Leaf 'Prevent executing commands if server stopped'.
+
+diff --git a/src/main/java/net/minecraft/server/PacketStatusListener.java b/src/main/java/net/minecraft/server/PacketStatusListener.java
+index f3c25367d5bc40855fb71c1c4c8b22efff8d71ac..46aa6c2fd171930e51f96b1f425e8e8f4a938ce1 100644
+--- a/src/main/java/net/minecraft/server/PacketStatusListener.java
++++ b/src/main/java/net/minecraft/server/PacketStatusListener.java
+@@ -30,6 +30,13 @@ public class PacketStatusListener implements PacketStatusInListener {
+             this.networkManager.close(PacketStatusListener.a);
+         } else {
+             this.d = true;
++            // Dionysus start - do not respond to pings before the protocol version is known,
++            // so clients don't see "outdated server" while the server is still booting.
++            // Based on Gale/Purpur "Fix 'outdated server' showing in ping before server fully boots".
++            if (this.minecraftServer.getServerPing().getServerData() == null) {
++                return;
++            }
++            // Dionysus end
+             // Paper start - Replace everything
+             /*
+             // CraftBukkit start
+diff --git a/src/main/java/net/minecraft/server/PlayerConnection.java b/src/main/java/net/minecraft/server/PlayerConnection.java
+index 288ce081c4680963c2b9588bbeb3544e981a0b04..08226b46413584b16acf9d47e665c7e2aa81e36b 100644
+--- a/src/main/java/net/minecraft/server/PlayerConnection.java
++++ b/src/main/java/net/minecraft/server/PlayerConnection.java
+@@ -1558,6 +1558,12 @@ public class PlayerConnection implements PacketListenerPlayIn, ITickable {
+     private void handleCommand(String s) {
+         MinecraftTimings.playerCommandTimer.startTiming(); // Paper
+        // CraftBukkit start - whole method
++        // Dionysus start - don't execute commands after the server has stopped
++        if (this.minecraftServer.isStopped()) {
++            MinecraftTimings.playerCommandTimer.stopTiming(); // Paper
++            return;
++        }
++        // Dionysus end
+         if ( org.spigotmc.SpigotConfig.logCommands ) // Spigot
+         this.LOGGER.info(this.player.getName() + " issued server command: " + s);
+ 

@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 02:51:31 +0800
+Subject: [PATCH] Add stack traces and async JSON list saving
+
+- Print the worker thread stack trace when a plugin leaves async
+  tasks running during reload, matching the existing shutdown-path
+  output (Airplane via Gale/Leaf; shutdown path already existed).
+
+- Save ops/whitelist/ban JSON lists asynchronously: the JSON snapshot
+  is built on the calling thread (so the backing map is never read
+  concurrently) and only the file write is offloaded to a dedicated
+  daemon thread; JsonList.waitForPendingSaves() is called in
+  MinecraftServer.stop() to flush pending writes. Based on Akarin as
+  ported by Leaf. Behind async-json-list-save (default true).
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index f671a7fb5ecc416dafffe462941c6582736d3dcf..63b123dba333fe1786bc1018221d2dc7796f25a9 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -465,4 +465,12 @@ public class DionysusConfig {
+                 unlike an earlier FlamePaper-based attempt removed in v0.1.16, this
+                 implementation never skips based on block occlusion.""");
+     }
++
++    public static boolean asyncJsonListSave = true;
++    private static void asyncJsonListSave() {
++        asyncJsonListSave = getBoolean("async-json-list-save", asyncJsonListSave, """
++                Save ops/whitelist/ban JSON lists asynchronously. The JSON snapshot is
++                still built on the main thread, only the file write is offloaded, and
++                pending saves are flushed when the server stops.""");
++    }
+ }
+diff --git a/src/main/java/net/minecraft/server/JsonList.java b/src/main/java/net/minecraft/server/JsonList.java
+index 2a259758b5cf1fd66f5300036d0821c554e457a3..d522546f4588d087f2546a91e5cc734c21d87def 100644
+--- a/src/main/java/net/minecraft/server/JsonList.java
++++ b/src/main/java/net/minecraft/server/JsonList.java
+@@ -12,6 +12,7 @@ import com.google.gson.JsonObject;
+ import com.google.gson.JsonParseException;
+ import com.google.gson.JsonSerializationContext;
+ import com.google.gson.JsonSerializer;
++import dev.pomf.dionysus.DionysusConfig; // Dionysus
+ import java.io.BufferedReader;
+ import java.io.BufferedWriter;
+ import java.io.File;
+@@ -164,11 +165,62 @@ public class JsonList<K, V extends JsonListEntry<K>> {
+         return this.d;
+     }
+ 
++    // Dionysus start - async JSON list saving; based on Akarin's "Save Json list
++    // asynchronously" as ported by Leaf. The JSON snapshot is still built on the calling
++    // thread so the backing map is never read concurrently; only the file write is
++    // offloaded. waitForPendingSaves() is called on server stop to flush pending writes.
++    private static final java.util.concurrent.ExecutorService dionysusSaveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor((runnable) -> {
++        Thread thread = new Thread(runnable, "Dionysus-JsonList-Save");
++
++        thread.setDaemon(true);
++        return thread;
++    });
++    private static final java.util.concurrent.atomic.AtomicInteger dionysusPendingSaves = new java.util.concurrent.atomic.AtomicInteger();
++
++    public static void waitForPendingSaves() {
++        long deadline = System.currentTimeMillis() + 5000L;
++
++        while (dionysusPendingSaves.get() > 0 && System.currentTimeMillis() < deadline) {
++            try {
++                Thread.sleep(10L);
++            } catch (InterruptedException interruptedexception) {
++                Thread.currentThread().interrupt();
++                break;
++            }
++        }
++
++        if (dionysusPendingSaves.get() > 0) {
++            JsonList.a.warn("Timed out waiting for {} async JSON list save(s) to finish", (Object) dionysusPendingSaves.get());
++        }
++    }
++    // Dionysus end
++
+     public void save() throws IOException {
+         this.removeStaleEntries(); // Paper - remove expired values before saving
+-        
++
+         Collection collection = this.d.values();
+-        String s = this.b.toJson(collection);
++        final String s = this.b.toJson(collection);
++
++        // Dionysus start - offload the file write
++        if (!DionysusConfig.asyncJsonListSave) {
++            this.dionysusWriteToFile(s);
++            return;
++        }
++
++        dionysusPendingSaves.incrementAndGet();
++        dionysusSaveExecutor.execute(() -> {
++            try {
++                this.dionysusWriteToFile(s);
++            } catch (IOException ioexception) {
++                JsonList.a.warn("Could not save the list asynchronously", ioexception);
++            } finally {
++                dionysusPendingSaves.decrementAndGet();
++            }
++        });
++        // Dionysus end
++    }
++
++    private void dionysusWriteToFile(String s) throws IOException { // Dionysus - extracted writer
+         BufferedWriter bufferedwriter = null;
+ 
+         try {
+@@ -177,7 +229,6 @@ public class JsonList<K, V extends JsonListEntry<K>> {
+         } finally {
+             IOUtils.closeQuietly(bufferedwriter);
+         }
+-
+     }
+ 
+     public void load() throws FileNotFoundException {
+diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
+index 5cb0333e1597ed122995da65f43e3167e091adc7..87be59f381d5676efb3a1df0646fa1119a116bd3 100644
+--- a/src/main/java/net/minecraft/server/MinecraftServer.java
++++ b/src/main/java/net/minecraft/server/MinecraftServer.java
+@@ -481,6 +481,7 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+         // CraftBukkit end
+         MinecraftServer.LOGGER.info("Stopping server");
+         MinecraftTimings.stopServer(); // Paper
++        JsonList.waitForPendingSaves(); // Dionysus - flush pending async JSON list saves
+         // CraftBukkit start
+         if (this.server != null) {
+             this.server.disablePlugins();
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index 897df74f5d3a4f56a1a075743bd7ce84566e81b1..c57d1bfe92b836b539318147a18a6f30b61b4b97 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -805,6 +805,12 @@ public final class CraftServer implements Server {
+                 plugin.getDescription().getName(),
+                 "This plugin is not properly shutting down its async tasks when it is being reloaded.  This may cause conflicts with the newly loaded version of the plugin"
+             ));
++            // Dionysus start - print the worker thread stack trace (Airplane, as ported by Gale)
++            getLogger().log(Level.SEVERE, String.format("%s Stacktrace", worker.getThread().getName()));
++            for (StackTraceElement element : worker.getThread().getStackTrace()) {
++                getLogger().log(Level.SEVERE, "  " + element);
++            }
++            // Dionysus end
+         }
+         loadPlugins();
+         enablePlugins(PluginLoadOrder.STARTUP);

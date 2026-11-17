@@ -1,0 +1,234 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 02:37:57 +0800
+Subject: [PATCH] Skip event construction when no listeners are registered
+
+Three event types are fired extremely often but are only consumed by
+plugins that explicitly listen for them:
+
+- BlockPhysicsEvent (CraftEventFactory.callBlockPhysicsEvent now
+  returns null when there are no listeners, skipping the CraftBlock
+  snapshot; BlockPlant/BlockTallPlant treat null as not-cancelled)
+- PreCreatureSpawnEvent (natural spawning loop and mob spawners)
+- VehicleEntityCollisionEvent (boat and minecart collide paths, six
+  sites; the CraftEntity lookups are also skipped)
+
+When no listener is registered the construction and dispatch are
+skipped entirely, which is behavior-identical (an event nobody hears
+cannot cancel anything) and saves allocation-heavy work on hot paths
+such as redstone physics and entity collisions.
+
+Based on Leaf's 'Skip BlockPhysicsEvent/PreCreatureSpawnEvent/
+VehicleEntityCollisionEvent if no listeners' pattern.
+
+diff --git a/src/main/java/net/minecraft/server/BlockPlant.java b/src/main/java/net/minecraft/server/BlockPlant.java
+index 16c81562ff8e4d7a6e0af78b5baccc1b92ce7960..bbf063075cf7e6fc91eebc8042d49a483d100ae7 100644
+--- a/src/main/java/net/minecraft/server/BlockPlant.java
++++ b/src/main/java/net/minecraft/server/BlockPlant.java
+@@ -41,7 +41,10 @@ public class BlockPlant extends Block {
+     protected void e(World world, BlockPosition blockposition, IBlockData iblockdata) {
+         if (!this.f(world, blockposition, iblockdata)) {
+             // CraftBukkit start
+-            if (org.bukkit.craftbukkit.event.CraftEventFactory.callBlockPhysicsEvent(world, blockposition).isCancelled()) {
++            // Dionysus start - callBlockPhysicsEvent returns null when there are no listeners
++            org.bukkit.event.block.BlockPhysicsEvent blockPhysicsEvent = org.bukkit.craftbukkit.event.CraftEventFactory.callBlockPhysicsEvent(world, blockposition);
++            if (blockPhysicsEvent != null && blockPhysicsEvent.isCancelled()) {
++            // Dionysus end
+                 return;
+             }
+             // CraftBukkit end
+diff --git a/src/main/java/net/minecraft/server/BlockTallPlant.java b/src/main/java/net/minecraft/server/BlockTallPlant.java
+index e3ebf6fcc2192f199fd03672bad7e9f658e4381c..74b522c2e5f2960991ac77a103e31c05c413ab5d 100644
+--- a/src/main/java/net/minecraft/server/BlockTallPlant.java
++++ b/src/main/java/net/minecraft/server/BlockTallPlant.java
+@@ -49,7 +49,10 @@ public class BlockTallPlant extends BlockPlant implements IBlockFragilePlantElem
+     protected void e(World world, BlockPosition blockposition, IBlockData iblockdata) {
+         if (!this.f(world, blockposition, iblockdata)) {
+             // CraftBukkit start
+-            if (org.bukkit.craftbukkit.event.CraftEventFactory.callBlockPhysicsEvent(world, blockposition).isCancelled()) {
++            // Dionysus start - callBlockPhysicsEvent returns null when there are no listeners
++            org.bukkit.event.block.BlockPhysicsEvent blockPhysicsEvent = org.bukkit.craftbukkit.event.CraftEventFactory.callBlockPhysicsEvent(world, blockposition);
++            if (blockPhysicsEvent != null && blockPhysicsEvent.isCancelled()) {
++            // Dionysus end
+                 return;
+             }
+             // CraftBukkit end
+diff --git a/src/main/java/net/minecraft/server/EntityBoat.java b/src/main/java/net/minecraft/server/EntityBoat.java
+index 8996267658531c726381a3894b2081f2dd30aedf..e5b4aff4ed192129e7edb5983978b71ca725e11a 100644
+--- a/src/main/java/net/minecraft/server/EntityBoat.java
++++ b/src/main/java/net/minecraft/server/EntityBoat.java
+@@ -159,23 +159,31 @@ public class EntityBoat extends Entity {
+         if (entity instanceof EntityBoat) {
+             if (entity.getBoundingBox().b < this.getBoundingBox().e) {
+                 // CraftBukkit start
+-                VehicleEntityCollisionEvent event = new VehicleEntityCollisionEvent((Vehicle) this.getBukkitEntity(), entity.getBukkitEntity());
+-                this.world.getServer().getPluginManager().callEvent(event);
++                // Dionysus start - skip VehicleEntityCollisionEvent when no listeners are registered
++                if (org.bukkit.event.vehicle.VehicleEntityCollisionEvent.getHandlerList().getRegisteredListeners().length != 0) {
++                    VehicleEntityCollisionEvent event = new VehicleEntityCollisionEvent((Vehicle) this.getBukkitEntity(), entity.getBukkitEntity());
++                    this.world.getServer().getPluginManager().callEvent(event);
+ 
+-                if (event.isCancelled()) {
+-                    return;
++                    if (event.isCancelled()) {
++                        return;
++                    }
+                 }
++                // Dionysus end
+                 // CraftBukkit end
+                 super.collide(entity);
+             }
+         } else if (entity.getBoundingBox().b <= this.getBoundingBox().b) {
+             // CraftBukkit start
+-            VehicleEntityCollisionEvent event = new VehicleEntityCollisionEvent((Vehicle) this.getBukkitEntity(), entity.getBukkitEntity());
+-            this.world.getServer().getPluginManager().callEvent(event);
++            // Dionysus start - skip VehicleEntityCollisionEvent when no listeners are registered
++            if (org.bukkit.event.vehicle.VehicleEntityCollisionEvent.getHandlerList().getRegisteredListeners().length != 0) {
++                VehicleEntityCollisionEvent event = new VehicleEntityCollisionEvent((Vehicle) this.getBukkitEntity(), entity.getBukkitEntity());
++                this.world.getServer().getPluginManager().callEvent(event);
+ 
+-            if (event.isCancelled()) {
+-                return;
++                if (event.isCancelled()) {
++                    return;
++                }
+             }
++            // Dionysus end
+             // CraftBukkit end
+             super.collide(entity);
+         }
+diff --git a/src/main/java/net/minecraft/server/EntityMinecartAbstract.java b/src/main/java/net/minecraft/server/EntityMinecartAbstract.java
+index fa0dd4798a24a3b91bdee00c0c92f46187af949e..272436e9af16175966f9301a8d93f0aea9bf18d1 100644
+--- a/src/main/java/net/minecraft/server/EntityMinecartAbstract.java
++++ b/src/main/java/net/minecraft/server/EntityMinecartAbstract.java
+@@ -346,22 +346,30 @@ public abstract class EntityMinecartAbstract extends Entity implements INamableT
+ 
+                         if (!(entity instanceof EntityHuman) && !(entity instanceof EntityIronGolem) && !(entity instanceof EntityMinecartAbstract) && !this.isVehicle() && !entity.isPassenger()) {
+                             // CraftBukkit start
+-                            VehicleEntityCollisionEvent collisionEvent = new VehicleEntityCollisionEvent(vehicle, entity.getBukkitEntity());
+-                            this.world.getServer().getPluginManager().callEvent(collisionEvent);
+-
+-                            if (collisionEvent.isCancelled()) {
+-                                continue;
++                            // Dionysus start - skip VehicleEntityCollisionEvent when no listeners are registered
++                            if (org.bukkit.event.vehicle.VehicleEntityCollisionEvent.getHandlerList().getRegisteredListeners().length != 0) {
++                                VehicleEntityCollisionEvent collisionEvent = new VehicleEntityCollisionEvent(vehicle, entity.getBukkitEntity());
++                                this.world.getServer().getPluginManager().callEvent(collisionEvent);
++
++                                if (collisionEvent.isCancelled()) {
++                                    continue;
++                                }
+                             }
++                            // Dionysus end
+                             // CraftBukkit end
+                             entity.startRiding(this);
+                         } else {
+                             // CraftBukkit start
+-                            VehicleEntityCollisionEvent collisionEvent = new VehicleEntityCollisionEvent(vehicle, entity.getBukkitEntity());
+-                            this.world.getServer().getPluginManager().callEvent(collisionEvent);
+-
+-                            if (collisionEvent.isCancelled()) {
+-                                continue;
++                            // Dionysus start - skip VehicleEntityCollisionEvent when no listeners are registered
++                            if (org.bukkit.event.vehicle.VehicleEntityCollisionEvent.getHandlerList().getRegisteredListeners().length != 0) {
++                                VehicleEntityCollisionEvent collisionEvent = new VehicleEntityCollisionEvent(vehicle, entity.getBukkitEntity());
++                                this.world.getServer().getPluginManager().callEvent(collisionEvent);
++
++                                if (collisionEvent.isCancelled()) {
++                                    continue;
++                                }
+                             }
++                            // Dionysus end
+                             // CraftBukkit end
+                             entity.collide(this);
+                         }
+@@ -375,12 +383,16 @@ public abstract class EntityMinecartAbstract extends Entity implements INamableT
+ 
+                     if (!this.w(entity1) && entity1.isCollidable() && entity1 instanceof EntityMinecartAbstract) {
+                         // CraftBukkit start
+-                        VehicleEntityCollisionEvent collisionEvent = new VehicleEntityCollisionEvent(vehicle, entity1.getBukkitEntity());
+-                        this.world.getServer().getPluginManager().callEvent(collisionEvent);
++                        // Dionysus start - skip VehicleEntityCollisionEvent when no listeners are registered
++                        if (org.bukkit.event.vehicle.VehicleEntityCollisionEvent.getHandlerList().getRegisteredListeners().length != 0) {
++                            VehicleEntityCollisionEvent collisionEvent = new VehicleEntityCollisionEvent(vehicle, entity1.getBukkitEntity());
++                            this.world.getServer().getPluginManager().callEvent(collisionEvent);
+ 
+-                        if (collisionEvent.isCancelled()) {
+-                            continue;
++                            if (collisionEvent.isCancelled()) {
++                                continue;
++                            }
+                         }
++                        // Dionysus end
+                         // CraftBukkit end
+                         entity1.collide(this);
+                     }
+@@ -718,12 +730,16 @@ public abstract class EntityMinecartAbstract extends Entity implements INamableT
+             if (!entity.noclip && !this.noclip) {
+                 if (!this.w(entity)) {
+                     // CraftBukkit start
+-                    VehicleEntityCollisionEvent collisionEvent = new VehicleEntityCollisionEvent((Vehicle) this.getBukkitEntity(), entity.getBukkitEntity());
+-                    this.world.getServer().getPluginManager().callEvent(collisionEvent);
++                    // Dionysus start - skip VehicleEntityCollisionEvent when no listeners are registered
++                    if (org.bukkit.event.vehicle.VehicleEntityCollisionEvent.getHandlerList().getRegisteredListeners().length != 0) {
++                        VehicleEntityCollisionEvent collisionEvent = new VehicleEntityCollisionEvent((Vehicle) this.getBukkitEntity(), entity.getBukkitEntity());
++                        this.world.getServer().getPluginManager().callEvent(collisionEvent);
+ 
+-                    if (collisionEvent.isCancelled()) {
+-                        return;
++                        if (collisionEvent.isCancelled()) {
++                            return;
++                        }
+                     }
++                    // Dionysus end
+                     // CraftBukkit end
+                     double d0 = entity.locX - this.locX;
+                     double d1 = entity.locZ - this.locZ;
+diff --git a/src/main/java/net/minecraft/server/MobSpawnerAbstract.java b/src/main/java/net/minecraft/server/MobSpawnerAbstract.java
+index 6c5d88c86a52a6e15b6255bf79a8ff503ede1e37..d48543f4c8e5fa4e6d9471404412d6c0a5876d4d 100644
+--- a/src/main/java/net/minecraft/server/MobSpawnerAbstract.java
++++ b/src/main/java/net/minecraft/server/MobSpawnerAbstract.java
+@@ -100,7 +100,8 @@ public abstract class MobSpawnerAbstract {
+                     }
+                     String key = this.getMobName().getKey();
+                     org.bukkit.entity.EntityType type = org.bukkit.entity.EntityType.fromName(key);
+-                    if (type != null) {
++                    // Dionysus start - skip PreCreatureSpawnEvent when no listeners are registered
++                    if (type != null && com.destroystokyo.paper.event.entity.PreCreatureSpawnEvent.getHandlerList().getRegisteredListeners().length != 0) {
+                         com.destroystokyo.paper.event.entity.PreCreatureSpawnEvent event;
+                         event = new com.destroystokyo.paper.event.entity.PreCreatureSpawnEvent(
+                                 MCUtil.toLocation(world, d3, d4, d5),
+diff --git a/src/main/java/net/minecraft/server/SpawnerCreature.java b/src/main/java/net/minecraft/server/SpawnerCreature.java
+index d3390faf9d55a760eb9347c87c6e6e3167e26eca..7e8ab9185bbbf34b2fda3e4ad1ba6a23aa4ddd92 100644
+--- a/src/main/java/net/minecraft/server/SpawnerCreature.java
++++ b/src/main/java/net/minecraft/server/SpawnerCreature.java
+@@ -216,10 +216,11 @@ public final class SpawnerCreature {
+ 
+                                                     if (worldserver.a(enumcreaturetype, biomebase_biomemeta, (BlockPosition) blockposition_mutableblockposition) && a(EntityPositionTypes.a(biomebase_biomemeta.b), worldserver, blockposition_mutableblockposition)) {
+                                                         // Paper start
++                                                        // Dionysus start - skip PreCreatureSpawnEvent when no listeners are registered
+                                                         com.destroystokyo.paper.event.entity.PreCreatureSpawnEvent event;
+                                                         Class<? extends EntityInsentient> cls = biomebase_biomemeta.b;
+                                                         org.bukkit.entity.EntityType type = EntityTypes.clsToTypeMap.get(cls);
+-                                                        if (type != null) {
++                                                        if (type != null && com.destroystokyo.paper.event.entity.PreCreatureSpawnEvent.getHandlerList().getRegisteredListeners().length != 0) {
+                                                             event = new com.destroystokyo.paper.event.entity.PreCreatureSpawnEvent(
+                                                                     MCUtil.toLocation(worldserver, blockposition_mutableblockposition),
+                                                                     type, SpawnReason.NATURAL
+diff --git a/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java b/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java
+index 20a060c7d5ffa3d04a742139e003ee497799c546..deca4cc1c89fb0f8c7640698b5fafd2f5f411d22 100644
+--- a/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java
++++ b/src/main/java/org/bukkit/craftbukkit/event/CraftEventFactory.java
+@@ -1161,6 +1161,12 @@ public class CraftEventFactory {
+     }
+ 
+     public static BlockPhysicsEvent callBlockPhysicsEvent(World world, BlockPosition blockposition) {
++        // Dionysus start - skip constructing the CraftBlock snapshot and event when no
++        // listeners are registered; callers treat null as "not cancelled"
++        if (BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length == 0) {
++            return null;
++        }
++        // Dionysus end
+         org.bukkit.block.Block block = world.getWorld().getBlockAt(blockposition.getX(), blockposition.getY(), blockposition.getZ());
+         BlockPhysicsEvent event = new BlockPhysicsEvent(block, block.getTypeId());
+         world.getServer().getPluginManager().callEvent(event);

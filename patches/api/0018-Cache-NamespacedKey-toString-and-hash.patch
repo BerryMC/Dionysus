@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 02:55:10 +0800
+Subject: [PATCH] Cache NamespacedKey toString and hash
+
+NamespacedKey is immutable, so lazily cache toString() (namespace + ":"
++ key) and hashCode() on first use. Keys are used as map keys and in
+logging/persistence throughout the API, where toString/hashCode are
+recomputed constantly today.
+
+Based on Leaf's 'Cache namespacedKey toString and hash'.
+
+diff --git a/src/main/java/org/bukkit/NamespacedKey.java b/src/main/java/org/bukkit/NamespacedKey.java
+index bd5238ce4ce6acf1024d8fd4ff51ea96efebab22..9ea2ac78121f6e88056ff882de966eca47c6e706 100644
+--- a/src/main/java/org/bukkit/NamespacedKey.java
++++ b/src/main/java/org/bukkit/NamespacedKey.java
+@@ -34,6 +34,12 @@ public final class NamespacedKey {
+     //
+     private final String namespace;
+     private final String key;
++    // Dionysus start - cache toString and hashCode; NamespacedKey is immutable so the
++    // lazily computed values are stable. Based on Leaf's
++    // "Cache namespacedKey toString and hash".
++    private String keyStr;
++    private int hash;
++    // Dionysus end
+ 
+     /**
+      * Create a key in a specific namespace.
+@@ -85,10 +91,16 @@ public final class NamespacedKey {
+ 
+     @Override
+     public int hashCode() {
+-        int hash = 5;
+-        hash = 47 * hash + this.namespace.hashCode();
+-        hash = 47 * hash + this.key.hashCode();
++        // Dionysus start - cache hashCode
++        int hash = this.hash;
++        if (hash == 0) {
++            hash = 5;
++            hash = 47 * hash + this.namespace.hashCode();
++            hash = 47 * hash + this.key.hashCode();
++            this.hash = hash;
++        }
+         return hash;
++        // Dionysus end
+     }
+ 
+     @Override
+@@ -105,7 +117,14 @@ public final class NamespacedKey {
+ 
+     @Override
+     public String toString() {
+-        return this.namespace + ":" + this.key;
++        // Dionysus start - cache toString
++        String keyStr = this.keyStr;
++        if (keyStr == null) {
++            keyStr = this.namespace + ":" + this.key;
++            this.keyStr = keyStr;
++        }
++        return keyStr;
++        // Dionysus end
+     }
+ 
+     /**

@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 02:35:01 +0800
+Subject: [PATCH] Optimize varint writing in PacketDataSerializer
+
+Replace the byte-at-a-time while loop in PacketDataSerializer#d(int)
+with Velocity's branch-per-length approach: 1-4 byte varints are
+emitted as single writeByte/writeShort/writeMedium/writeInt calls and
+the 5-byte (negative) case as writeInt + writeByte. The big-endian
+group writes match the byte order of the varint wire layout, so the
+format is unchanged.
+
+Varints are written on nearly every packet (entity ids, positions,
+counts), so this cuts a shift+write per byte down to fixed-width
+buffer writes.
+
+Based on Velocity's 'Optimize varint writing' by Andrew Steinborn as
+ported by Gale/Leaf ('Optimize VarInt#write and VarLong#write').
+The varlong writer (b(long)) is left as-is: it is rarely used in 1.12.2.
+
+diff --git a/src/main/java/net/minecraft/server/PacketDataSerializer.java b/src/main/java/net/minecraft/server/PacketDataSerializer.java
+index 07d4a7cd3edca01558377f4a48d6c4eb30a53d87..774cee0ffbf6551cae7e06e624de972466485529 100644
+--- a/src/main/java/net/minecraft/server/PacketDataSerializer.java
++++ b/src/main/java/net/minecraft/server/PacketDataSerializer.java
+@@ -185,13 +185,41 @@ public class PacketDataSerializer extends ByteBuf {
+     }
+ 
+     public PacketDataSerializer d(int i) {
+-        while ((i & -128) != 0) {
+-            this.writeByte(i & 127 | 128);
+-            i >>>= 7;
++        // Dionysus start - optimized varint writing: emit whole bytes via writeShort/Medium/Int
++        // instead of a byte-at-a-time loop. Based on Velocity's "Optimize varint writing"
++        // (Andrew Steinborn) as ported by Gale/Leaf ("Optimize VarInt#write"), wire format
++        // unchanged (big-endian group writes match the byte order of the varint layout).
++        if ((i & 0xFFFFFF80) == 0) {
++            this.writeByte(i);
++        } else if ((i & 0xFFFFC000) == 0) {
++            int w = (i & 0x7F) << 8
++                | (i >>> 7)
++                | 0x00008000;
++            this.writeShort(w);
++        } else if ((i & 0xFFE00000) == 0) {
++            int w = (i & 0x7F) << 16
++                | (i & 0x3F80) << 1
++                | (i >>> 14)
++                | 0x00808000;
++            this.writeMedium(w);
++        } else if ((i & 0xF0000000) == 0) {
++            int w = (i & 0x7F) << 24
++                | (i & 0x3F80) << 9
++                | (i & 0x1FC000) >> 6
++                | (i >>> 21)
++                | 0x80808000;
++            this.writeInt(w);
++        } else {
++            int w = (i & 0x7F) << 24
++                | (i & 0x3F80) << 9
++                | (i & 0x1FC000) >> 6
++                | ((i >>> 21) & 0x7F)
++                | 0x80808080;
++            this.writeInt(w);
++            this.writeByte(i >>> 28);
+         }
+-
+-        this.writeByte(i);
+         return this;
++        // Dionysus end
+     }
+ 
+     public PacketDataSerializer b(long i) {
