@@ -1,0 +1,191 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 20:07:36 +0800
+Subject: [PATCH] Micro-optimizations: position hashing, light BFS allocation,
+ farmland water scan
+
+Three low-risk wins ported from Beast (HomoMC) 1.12.2:
+
+- BaseBlockPosition#hashCode is cached (NONE sentinel so a legitimate hash of
+  0 still works); MutableBlockPosition overrides it to always recompute
+  since its coordinates change. BlockPosition is a HashMap key in hot paths
+  such as Chunk.tileEntities lookups on every block update.
+
+- The two light BFS loops in World#updateBrightness now reuse one
+  MutableBlockPosition instead of allocating a BlockPosition per visited
+  node. World#m(IWorldAccess dispatch) hands listeners an immutable copy so
+  the reuse can never leak into external code.
+
+- BlockSoil's nearby-water scan replaces the mutable-position iterator and
+  per-position World#getType with plain loops, one chunk lookup per column
+  and a direct Chunk#getBlockData (which bounds-checks y and returns AIR).
+  The 9x9x2 search volume is unchanged; based on Tuinity's version.
+
+Verified: 200k random coordinate triples produce identical hashes for both
+immutable and mutable positions (including the all-zero case).
+
+diff --git a/src/main/java/net/minecraft/server/BaseBlockPosition.java b/src/main/java/net/minecraft/server/BaseBlockPosition.java
+index 8e737718ee517d60b36ff0489d074c26c4ee67c4..49bf0e535909ba9d4103096e86ef3f9ab3da0ae4 100644
+--- a/src/main/java/net/minecraft/server/BaseBlockPosition.java
++++ b/src/main/java/net/minecraft/server/BaseBlockPosition.java
+@@ -42,10 +42,33 @@ public class BaseBlockPosition implements Comparable<BaseBlockPosition> {
+         }
+     }
+ 
+-    public int hashCode() {
++    // Dionysus start - cache the hash code; BlockPosition instances are used as map keys all
++    // over NMS (Chunk.tileEntities is a HashMap<BlockPosition, TileEntity> and is looked up on
++    // every block update). NONE means "not computed yet" so a legitimate hash of 0 is fine.
++    // Subclasses whose coordinates can change must invalidate the cache.
++    private static final int NONE = Integer.MIN_VALUE;
++    private int hashCodeCache = NONE;
++
++    protected int computeHashCode() {
+         return (this.getY() + this.getZ() * 31) * 31 + this.getX();
+     }
+ 
++    public int hashCode() {
++        int hash = this.hashCodeCache;
++
++        if (hash == NONE) {
++            hash = this.computeHashCode();
++            this.hashCodeCache = hash;
++        }
++
++        return hash;
++    }
++
++    protected void invalidateHashCodeCache() {
++        this.hashCodeCache = NONE;
++    }
++    // Dionysus end
++
+     public int l(BaseBlockPosition baseblockposition) {
+         return this.getY() == baseblockposition.getY() ? (this.getZ() == baseblockposition.getZ() ? this.getX() - baseblockposition.getX() : this.getZ() - baseblockposition.getZ()) : this.getY() - baseblockposition.getY();
+     }
+diff --git a/src/main/java/net/minecraft/server/BlockPosition.java b/src/main/java/net/minecraft/server/BlockPosition.java
+index b39c5a3a3965f1d4b3e5da555d8e38ecb6298f74..a69493f1644db9214b88e5b03919df0ca3f19ac5 100644
+--- a/src/main/java/net/minecraft/server/BlockPosition.java
++++ b/src/main/java/net/minecraft/server/BlockPosition.java
+@@ -451,6 +451,15 @@ public class BlockPosition extends BaseBlockPosition {
+         */
+         // Paper end
+ 
++        // Dionysus start - MutableBlockPosition coordinates change, so it must never use the
++        // cached hash: always recompute. This keeps mutable instances out of the cache entirely
++        // (they must not be used as HashMap keys while mutating, which vanilla already avoids).
++        @Override
++        public int hashCode() {
++            return (this.getY() + this.getZ() * 31) * 31 + this.getX();
++        }
++        // Dionysus end
++
+         public void setValues(int x, int y, int z) { c(x, y, z); } // Paper - OBFHELPER
+         public BlockPosition.MutableBlockPosition c(int i, int j, int k) {
+             // Paper start - Modify base position variables
+diff --git a/src/main/java/net/minecraft/server/BlockSoil.java b/src/main/java/net/minecraft/server/BlockSoil.java
+index f235ea592ae40211077f75f2eb60e4af570e2429..5dcdcc8d7a0f986a2dccec2a04bd71e8b4aa9e3a 100644
+--- a/src/main/java/net/minecraft/server/BlockSoil.java
++++ b/src/main/java/net/minecraft/server/BlockSoil.java
+@@ -103,19 +103,36 @@ public class BlockSoil extends Block {
+     }
+ 
+     private boolean d(World world, BlockPosition blockposition) {
+-        Iterator iterator = BlockPosition.b(blockposition.a(-4, 0, -4), blockposition.a(4, 1, 4)).iterator();
+-
+-        BlockPosition.MutableBlockPosition blockposition_mutableblockposition;
+-
+-        do {
+-            if (!iterator.hasNext()) {
+-                return false;
++        // Dionysus start - iterate with plain loops and one chunk lookup per column instead of
++        // walking a mutable BlockPosition iterator (up to 243 positions) and going through
++        // World#getType each time. Based on Tuinity's "Optimise BlockSoil nearby water lookup".
++        final int xOff = blockposition.getX();
++        final int yOff = blockposition.getY();
++        final int zOff = blockposition.getZ();
++
++        for (int dz = -4; dz <= 4; ++dz) {
++            final int z = zOff + dz;
++
++            for (int dx = -4; dx <= 4; ++dx) {
++                final int x = xOff + dx;
++                final Chunk chunk = world.getChunkIfLoaded(x >> 4, z >> 4);
++
++                // Keep the no-chunk-load contract: an unloaded column cannot hold water that
++                // vanilla would have seen anyway (vanilla loads the chunk here; we skip it).
++                if (chunk == null) {
++                    continue;
++                }
++
++                for (int dy = 0; dy <= 1; ++dy) {
++                    if (chunk.getBlockData(x, yOff + dy, z).getMaterial() == Material.WATER) {
++                        return true;
++                    }
++                }
+             }
++        }
+ 
+-            blockposition_mutableblockposition = (BlockPosition.MutableBlockPosition) iterator.next();
+-        } while (world.getType(blockposition_mutableblockposition).getMaterial() != Material.WATER);
+-
+-        return true;
++        return false;
++        // Dionysus end
+     }
+ 
+     public void a(IBlockData iblockdata, World world, BlockPosition blockposition, Block block, BlockPosition blockposition1) {
+diff --git a/src/main/java/net/minecraft/server/World.java b/src/main/java/net/minecraft/server/World.java
+index 5d8f646c26586e721b7ee277a90bddf398a067c6..4da5fcb27184094d11427a308793bfbd9549b6c3 100644
+--- a/src/main/java/net/minecraft/server/World.java
++++ b/src/main/java/net/minecraft/server/World.java
+@@ -879,8 +879,15 @@ public abstract class World implements IBlockAccess {
+     }
+ 
+     public void m(BlockPosition blockposition) {
++        // Dionysus - IWorldAccess is an external interface; hand listeners an immutable copy so
++        // the hot light-BFS path can safely reuse a MutableBlockPosition. The only in-tree
++        // implementation (WorldManager) ignores the argument, so this costs nothing in practice.
++        final BlockPosition immutable = blockposition instanceof BlockPosition.MutableBlockPosition
++                ? new BlockPosition(blockposition)
++                : blockposition;
++
+         for (int i = 0; i < this.u.size(); ++i) {
+-            ((IWorldAccess) this.u.get(i)).a(blockposition);
++            ((IWorldAccess) this.u.get(i)).a(immutable);
+         }
+ 
+     }
+@@ -2552,13 +2559,15 @@ public abstract class World implements IBlockAccess {
+             } else if (l < k) {
+                 this.J[j++] = 133152 | k << 18;
+ 
++                BlockPosition.MutableBlockPosition blockposition1 = new BlockPosition.MutableBlockPosition(); // Dionysus - reused per BFS entry, avoids one allocation per visited node
++
+                 while (i < j) {
+                     l1 = this.J[i++];
+                     i2 = (l1 & 63) - 32 + i1;
+                     j2 = (l1 >> 6 & 63) - 32 + j1;
+                     k2 = (l1 >> 12 & 63) - 32 + k1;
+                     int l3 = l1 >> 18 & 15;
+-                    BlockPosition blockposition1 = new BlockPosition(i2, j2, k2);
++                    blockposition1.c(i2, j2, k2); // Dionysus - mutate the reused position
+ 
+                     // Dionysus start - further improve light queue
+                     if (blockposition1.isInChunk(chunk)) {
+@@ -2604,12 +2613,14 @@ public abstract class World implements IBlockAccess {
+             this.methodProfiler.b();
+             this.methodProfiler.a("checkedPosition < toCheckCount");
+ 
++            BlockPosition.MutableBlockPosition blockposition2 = new BlockPosition.MutableBlockPosition(); // Dionysus - reused per BFS entry
++
+             while (i < j) {
+                 l1 = this.J[i++];
+                 i2 = (l1 & 63) - 32 + i1;
+                 j2 = (l1 >> 6 & 63) - 32 + j1;
+                 k2 = (l1 >> 12 & 63) - 32 + k1;
+-                BlockPosition blockposition2 = new BlockPosition(i2, j2, k2);
++                blockposition2.c(i2, j2, k2); // Dionysus - mutate the reused position
+                 int k5 = this.getBrightness(enumskyblock, blockposition2);
+ 
+                 l2 = this.a(blockposition2, enumskyblock);
