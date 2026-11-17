@@ -72,6 +72,12 @@ Every option is optional. Unless stated otherwise the default keeps vanilla beha
 |---|---|---|
 | `use-io-uring` | `false` | **Do not enable this unless you know what it is.** Switches netty to the experimental io_uring transport on Linux instead of epoll. Requires kernel io_uring support (the native library is bundled). This changes the socket channel implementation that packet-manipulation plugins such as ProtocolLib may assume, and io_uring is far less battle-tested than epoll. |
 
+### Power saving
+
+| Option | Default | Description |
+|---|---|---|
+| `pause-server-when-empty` | `false` | Freeze all world ticking (time, weather, entities, tile entities, mob spawning, chunk unload) while no players are online, and resume the moment a player joins. Server-level work keeps running while paused: network and login handling, the Bukkit scheduler, autosave and console commands. World time and loaded chunks are frozen in place — chunk unloading is also paused, so loaded chunks stay in memory until a player joins. Console log lines mark the pause/resume transitions. |
+
 ---
 
 ## Commands

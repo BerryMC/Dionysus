@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 ### Performance
 
 * Import `PathfinderNormal` and cache its path-node type classification (pathfinding hot path)
+* Add pause-when-empty: freeze world ticking while no players are online (`pause-server-when-empty`, default off)
 * Hoist the chunk lookup per column in the entity collision scan (up to 16 redundant lookups per column removed)
 * Hoist the chunk lookup out of the getLightLevel neighbor probes (6 map lookups per call reduced)
 * Cache `EnumDirection.values()` across NMS hot paths (light BFS, redstone, fire spread)
