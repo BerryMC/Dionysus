@@ -1,0 +1,388 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 17:07:27 +0800
+Subject: [PATCH] Add /tpsbar boss bar command
+
+Port Purpur's /tpsbar (as inherited by Leaf) to 1.12.2:
+
+- TPSBarTask keeps one boss bar per player and refreshes it every
+  tpsbar.tick-interval ticks from the existing TPS sample point in the
+  tick loop (no Bukkit plugin exists to own a scheduler task).
+- /tpsbar [on|off|toggle] toggles the bar; permission
+  dionysus.command.tpsbar.
+- Config: tpsbar.enabled, tick-interval, title (<tps>/<mspt>/<ping>
+  placeholders), fill-mode (TPS/MSPT), progress-color and text-color
+  good/medium/low.
+- MSPT comes from our own lastTickDuration measurement (1.12.2 has no
+  Server#getAverageTickTime) and ping from Player.Spigot#getPing.
+- 1.12.2 boss bar titles do not render legacy color codes, so the
+  title stays plain text and the bar color carries the signal.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusCommand.java b/src/main/java/dev/pomf/dionysus/DionysusCommand.java
+index 269b221474f2d3a737996a21b7e0619bf26301cf..8b8cecefb06c474a40449407231587763d29b196 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusCommand.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusCommand.java
+@@ -1,5 +1,7 @@
+ package dev.pomf.dionysus;
+ 
++import dev.pomf.dionysus.command.TPSBarCommand;
++import dev.pomf.dionysus.command.TPSBarTask;
+ import net.minecraft.server.MinecraftServer;
+ import org.bukkit.Bukkit;
+ import org.bukkit.ChatColor;
+@@ -24,6 +26,13 @@ public class DionysusCommand extends Command {
+ 
+     public static void init() {
+         MinecraftServer.getServer().server.getCommandMap().register("dionysus", "Dionysus", new DionysusCommand());
++
++        // Dionysus start - /tpsbar boss bar (ported from Purpur via Leaf)
++        if (DionysusConfig.tpsBarEnabled) {
++            TPSBarTask.INSTANCE = new TPSBarTask();
++            MinecraftServer.getServer().server.getCommandMap().register("dionysus", "Dionysus", new TPSBarCommand(TPSBarTask.INSTANCE));
++        }
++        // Dionysus end
+     }
+ 
+     @Override
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index f853ccd9f88a42c92de395dc2cef905c38554619..36796524740b5baceaaed625051679e1a2e5ecb0 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -1,5 +1,7 @@
+ package dev.pomf.dionysus;
+ 
++import dev.pomf.dionysus.command.TPSBarTask;
++
+ import dev.pomf.dionysus.simd.SIMDDetection;
+ import net.minecraft.server.MinecraftServer;
+ import net.minecraft.server.RegionFile;
+@@ -492,4 +494,45 @@ public class DionysusConfig {
+                 packet-manipulation plugins like ProtocolLib may assume, and io_uring
+                 itself is far less battle-tested than epoll. Default off.""");
+     }
++
++    // Dionysus start - /tpsbar (ported from Purpur via Leaf)
++    public enum TPSBarColor {
++        PINK, BLUE, RED, GREEN, YELLOW, PURPLE, WHITE
++    }
++
++    public enum TPSBarTextColor {
++        GREEN, YELLOW, RED
++    }
++
++    public static boolean tpsBarEnabled = true;
++    public static int tpsBarTickInterval = 20;
++    public static String tpsBarTitle = "<tps> TPS, <mspt> MSPT, <ping>ms ping";
++    public static TPSBarTask.FillMode tpsBarFillMode = TPSBarTask.FillMode.TPS;
++    public static TPSBarColor tpsBarColorGood = TPSBarColor.GREEN;
++    public static TPSBarColor tpsBarColorMedium = TPSBarColor.YELLOW;
++    public static TPSBarColor tpsBarColorLow = TPSBarColor.RED;
++    public static TPSBarTextColor tpsBarTextColorGood = TPSBarTextColor.GREEN;
++    public static TPSBarTextColor tpsBarTextColorMedium = TPSBarTextColor.YELLOW;
++    public static TPSBarTextColor tpsBarTextColorLow = TPSBarTextColor.RED;
++
++    private static void tpsBar() {
++        tpsBarEnabled = getBoolean("tpsbar.enabled", tpsBarEnabled, """
++                Allow players with dionysus.command.tpsbar to toggle a boss bar
++                showing live TPS/MSPT via /tpsbar.""");
++        tpsBarTickInterval = getInt("tpsbar.tick-interval", tpsBarTickInterval, """
++                How many server ticks between boss bar refreshes (20 = once a second).""");
++        tpsBarTitle = getString("tpsbar.title", tpsBarTitle, """
++                Title format. Placeholders: <tps>, <mspt>, <ping>.
++                Note: boss bar titles do not render color codes on 1.12.2, so the
++                per-value colors only apply to the bar itself.""");
++        tpsBarFillMode = TPSBarTask.FillMode.valueOf(getString("tpsbar.fill-mode", tpsBarFillMode.name(), """
++                What the bar progress represents: TPS or MSPT."""));
++        tpsBarColorGood = TPSBarColor.valueOf(getString("tpsbar.progress-color.good", tpsBarColorGood.name()));
++        tpsBarColorMedium = TPSBarColor.valueOf(getString("tpsbar.progress-color.medium", tpsBarColorMedium.name()));
++        tpsBarColorLow = TPSBarColor.valueOf(getString("tpsbar.progress-color.low", tpsBarColorLow.name()));
++        tpsBarTextColorGood = TPSBarTextColor.valueOf(getString("tpsbar.text-color.good", tpsBarTextColorGood.name()));
++        tpsBarTextColorMedium = TPSBarTextColor.valueOf(getString("tpsbar.text-color.medium", tpsBarTextColorMedium.name()));
++        tpsBarTextColorLow = TPSBarTextColor.valueOf(getString("tpsbar.text-color.low", tpsBarTextColorLow.name()));
++    }
++    // Dionysus end
+ }
+diff --git a/src/main/java/dev/pomf/dionysus/command/TPSBarCommand.java b/src/main/java/dev/pomf/dionysus/command/TPSBarCommand.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..97e08f3caba1788412df5f78aa7fafe496f2afce
+--- /dev/null
++++ b/src/main/java/dev/pomf/dionysus/command/TPSBarCommand.java
+@@ -0,0 +1,89 @@
++package dev.pomf.dionysus.command;
++
++import dev.pomf.dionysus.DionysusConfig;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import org.bukkit.Bukkit;
++import org.bukkit.command.Command;
++import org.bukkit.command.CommandSender;
++import org.bukkit.entity.Player;
++
++/**
++ * /tpsbar [on|off|toggle] - toggles the TPS boss bar for the executing player.
++ * Ported from Purpur's /tpsbar (via Leaf); see TPSBarTask for the rendering.
++ */
++public final class TPSBarCommand extends Command {
++
++    private final TPSBarTask task;
++
++    public TPSBarCommand(TPSBarTask task) {
++        super("tpsbar");
++
++        this.task = task;
++        this.description = "Toggles a boss bar showing server TPS and MSPT";
++        this.usageMessage = "/tpsbar [on|off|toggle]";
++        this.setPermission("dionysus.command.tpsbar");
++        this.setAliases(Collections.singletonList("tpsbar"));
++    }
++
++    @Override
++    public boolean execute(CommandSender sender, String label, String[] args) {
++        if (!(sender instanceof Player)) {
++            sender.sendMessage("This command can only be used by a player.");
++            return true;
++        }
++
++        if (!DionysusConfig.tpsBarEnabled) {
++            sender.sendMessage(org.bukkit.ChatColor.RED + "The TPS bar is disabled on this server.");
++            return true;
++        }
++
++        Player player = (Player) sender;
++
++        if (!testPermission(sender)) {
++            return true;
++        }
++
++        boolean shown;
++
++        if (args.length == 0 || args[0].equalsIgnoreCase("toggle")) {
++            shown = this.task.togglePlayer(player);
++        } else if (args[0].equalsIgnoreCase("on")) {
++            if (this.task.hasPlayer(player)) {
++                shown = true;
++            } else {
++                shown = this.task.togglePlayer(player);
++            }
++        } else if (args[0].equalsIgnoreCase("off")) {
++            if (this.task.hasPlayer(player)) {
++                shown = !this.task.togglePlayer(player);
++            } else {
++                shown = false;
++            }
++        } else {
++            player.sendMessage(org.bukkit.ChatColor.RED + "Usage: " + this.usageMessage);
++            return true;
++        }
++
++        player.sendMessage(org.bukkit.ChatColor.GREEN + "TPS bar " + (shown ? "enabled" : "disabled") + ".");
++        return true;
++    }
++
++    @Override
++    public List<String> tabComplete(CommandSender sender, String alias, String[] args) {
++        if (args.length == 1) {
++            List<String> options = new ArrayList<>();
++
++            for (String option : new String[] { "on", "off", "toggle" }) {
++                if (option.startsWith(args[0].toLowerCase(java.util.Locale.ROOT))) {
++                    options.add(option);
++                }
++            }
++
++            return options;
++        }
++
++        return Collections.emptyList();
++    }
++}
+diff --git a/src/main/java/dev/pomf/dionysus/command/TPSBarTask.java b/src/main/java/dev/pomf/dionysus/command/TPSBarTask.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..035c3b0f027007f1d2de6c8a4f6326cb426d9b11
+--- /dev/null
++++ b/src/main/java/dev/pomf/dionysus/command/TPSBarTask.java
+@@ -0,0 +1,167 @@
++package dev.pomf.dionysus.command;
++
++import dev.pomf.dionysus.DionysusConfig;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.Map;
++import java.util.UUID;
++import org.bukkit.Bukkit;
++import org.bukkit.boss.BarColor;
++import org.bukkit.boss.BarStyle;
++import org.bukkit.boss.BossBar;
++import org.bukkit.entity.Player;
++
++/**
++ * Keeps a per-player boss bar showing live TPS/MSPT, ported from Purpur's /tpsbar
++ * (as inherited by Leaf). Unlike Purpur this is driven by the server scheduler
++ * rather than a BukkitRunnable per command, and rendering is plain &amp;-codes
++ * because adventure/MiniMessage does not exist in 1.12.2.
++ */
++public final class TPSBarTask implements Runnable {
++
++    public enum FillMode {
++        TPS,
++        MSPT
++    }
++
++    // Dionysus - server-wide instance, driven from the tick loop (no Bukkit plugin exists)
++    public static TPSBarTask INSTANCE;
++
++    private final Map<UUID, BossBar> bossbars = new HashMap<>();
++    private double tps = 20.0D;
++    private double mspt = 0.0D;
++    private int tick = 0;
++
++    public boolean hasPlayer(Player player) {
++        return this.bossbars.containsKey(player.getUniqueId());
++    }
++
++    public boolean togglePlayer(Player player) {
++        if (removePlayer(player)) {
++            return false;
++        }
++
++        addPlayer(player);
++        return true;
++    }
++
++    public void addPlayer(Player player) {
++        removePlayer(player);
++
++        BossBar bossbar = Bukkit.createBossBar("", getBossBarColor(), BarStyle.SOLID);
++
++        this.bossbars.put(player.getUniqueId(), bossbar);
++        updateBossBar(bossbar, player);
++        bossbar.addPlayer(player);
++    }
++
++    public boolean removePlayer(Player player) {
++        BossBar bossbar = this.bossbars.remove(player.getUniqueId());
++
++        if (bossbar != null) {
++            bossbar.removePlayer(player);
++            return true;
++        }
++
++        return false;
++    }
++
++    public void removeAll() {
++        for (BossBar bossbar : new HashSet<>(this.bossbars.values())) {
++            bossbar.removeAll();
++        }
++
++        this.bossbars.clear();
++    }
++
++    @Override
++    public void run() {
++        if (++this.tick < Math.max(1, DionysusConfig.tpsBarTickInterval)) {
++            return;
++        }
++
++        this.tick = 0;
++        this.tps = Math.max(Math.min(Bukkit.getTPS()[0], 20.0D), 0.0D);
++        // Dionysus 1.12.2 has no Server#getAverageTickTime; use our own measurement.
++        this.mspt = net.minecraft.server.MinecraftServer.getServer().lastTickDuration / 1.0E6D;
++
++        Iterator<Map.Entry<UUID, BossBar>> iterator = this.bossbars.entrySet().iterator();
++
++        while (iterator.hasNext()) {
++            Map.Entry<UUID, BossBar> entry = iterator.next();
++            Player player = Bukkit.getPlayer(entry.getKey());
++
++            if (player == null || !player.isOnline()) {
++                entry.getValue().removeAll();
++                iterator.remove();
++                continue;
++            }
++
++            updateBossBar(entry.getValue(), player);
++        }
++    }
++
++    private void updateBossBar(BossBar bossbar, Player player) {
++        bossbar.setProgress(getBossBarProgress());
++        bossbar.setColor(getBossBarColor());
++
++        int ping = player.spigot().getPing();
++
++        // 1.12.2 boss bar titles do not render legacy color codes, so the title is
++        // plain text and the bar color carries the health signal.
++        bossbar.setTitle(DionysusConfig.tpsBarTitle
++                .replace("<tps>", String.format("%.2f", this.tps))
++                .replace("<mspt>", String.format("%.2f", this.mspt))
++                .replace("<ping>", String.valueOf(ping)));
++    }
++
++    private float getBossBarProgress() {
++        if (DionysusConfig.tpsBarFillMode == FillMode.MSPT) {
++            return Math.max(Math.min((float) this.mspt / 50.0F, 1.0F), 0.0F);
++        }
++
++        return Math.max(Math.min((float) this.tps / 20.0F, 1.0F), 0.0F);
++    }
++
++    private BarColor getBossBarColor() {
++        if (isGood(DionysusConfig.tpsBarFillMode)) {
++            return Denominations.toBarColor(DionysusConfig.tpsBarColorGood);
++        } else if (isMedium(DionysusConfig.tpsBarFillMode)) {
++            return Denominations.toBarColor(DionysusConfig.tpsBarColorMedium);
++        }
++
++        return Denominations.toBarColor(DionysusConfig.tpsBarColorLow);
++    }
++
++    private boolean isGood(FillMode mode) {
++        return mode == FillMode.MSPT ? this.mspt < 40.0D : this.tps >= 19.0D;
++    }
++
++    private boolean isMedium(FillMode mode) {
++        return mode == FillMode.MSPT ? this.mspt < 50.0D : this.tps >= 15.0D;
++    }
++
++    private static final class Denominations {
++        private static BarColor toBarColor(DionysusConfig.TPSBarColor color) {
++            switch (color) {
++                case PINK:
++                    return BarColor.PINK;
++                case BLUE:
++                    return BarColor.BLUE;
++                case RED:
++                    return BarColor.RED;
++                case GREEN:
++                    return BarColor.GREEN;
++                case YELLOW:
++                    return BarColor.YELLOW;
++                case PURPLE:
++                    return BarColor.PURPLE;
++                case WHITE:
++                default:
++                    return BarColor.WHITE;
++            }
++        }
++
++    }
++}
+diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
+index 8613141fb48f0deffe816cfe472e432920d8ba14..6edd86d61983c02e74c2f63b28b24af56165ec04 100644
+--- a/src/main/java/net/minecraft/server/MinecraftServer.java
++++ b/src/main/java/net/minecraft/server/MinecraftServer.java
+@@ -681,6 +681,11 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+                         recentTps[1] = tps5.getAverage();
+                         recentTps[2] = tps15.getAverage();
+                         // Paper end
++                        // Dionysus start - drive the /tpsbar boss bar from the tick loop
++                        if (dev.pomf.dionysus.command.TPSBarTask.INSTANCE != null) {
++                            dev.pomf.dionysus.command.TPSBarTask.INSTANCE.run();
++                        }
++                        // Dionysus end
+                         tickSection = curTime;
+                     }
+                     lastTick = curTime;
