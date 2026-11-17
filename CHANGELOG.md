@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 
 * Import `PathfinderNormal` and cache its path-node type classification (pathfinding hot path)
 * Hoist the chunk lookup per column in the entity collision scan (up to 16 redundant lookups per column removed)
+* Hoist the chunk lookup out of the getLightLevel neighbor probes (6 map lookups per call reduced)
 * Cache `EnumDirection.values()` across NMS hot paths (light BFS, redstone, fire spread)
 * Cache `BlockPosition` hash codes; reuse mutable positions in the light BFS
 * Optimize the scheduled-tick processing loop (single `pollFirst`, fewer allocations)
