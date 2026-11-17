@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 20:45:29 +0800
+Subject: [PATCH] Fix /tpsbar and /rambar refreshing 20x too slowly
+
+The tasks were invoked from inside the TPS sampling block, which only
+runs every SAMPLE_INTERVAL (20) ticks. Combined with the task's own
+tick-interval counter that made the configured interval mean
+interval * 20 ticks: with the default of 20 the bar refreshed once
+every ~20 seconds instead of once per second.
+
+Invoke the tasks once per tick instead, right after the tick body runs,
+so tick-interval is a plain tick count (20 = 1s) as documented. The
+early-return path is a single increment and comparison, so the
+per-tick cost when not refreshing is negligible.
+
+diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
+index 33fe2cb2e08ccdd883d8e17c1281b88e9c0eda3c..7c217ef7824c96380c1a75561f61fc7f30730569 100644
+--- a/src/main/java/net/minecraft/server/MinecraftServer.java
++++ b/src/main/java/net/minecraft/server/MinecraftServer.java
+@@ -681,15 +681,6 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+                         recentTps[1] = tps5.getAverage();
+                         recentTps[2] = tps15.getAverage();
+                         // Paper end
+-                        // Dionysus start - drive the /tpsbar boss bar from the tick loop
+-                        if (dev.pomf.dionysus.command.TPSBarTask.INSTANCE != null) {
+-                            dev.pomf.dionysus.command.TPSBarTask.INSTANCE.run();
+-                        }
+-
+-                        if (dev.pomf.dionysus.command.RamBarTask.INSTANCE != null) {
+-                            dev.pomf.dionysus.command.RamBarTask.INSTANCE.run();
+-                        }
+-                        // Dionysus end
+                         tickSection = curTime;
+                     }
+                     lastTick = curTime;
+@@ -699,6 +690,18 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+                     this.C();
+                     this.lastTickDuration = System.nanoTime() - tickStartTime;
+                     // Dionysus end
++
++                    // Dionysus start - drive the boss bar tasks once per tick. They keep their own
++                    // tick-interval counter, so the configured interval is in plain ticks
++                    // (20 = one second) instead of being multiplied by the TPS sample interval.
++                    if (dev.pomf.dionysus.command.TPSBarTask.INSTANCE != null) {
++                        dev.pomf.dionysus.command.TPSBarTask.INSTANCE.run();
++                    }
++
++                    if (dev.pomf.dionysus.command.RamBarTask.INSTANCE != null) {
++                        dev.pomf.dionysus.command.RamBarTask.INSTANCE.run();
++                    }
++                    // Dionysus end
+                     this.Q = true;
+                 }
+                 // Spigot end
