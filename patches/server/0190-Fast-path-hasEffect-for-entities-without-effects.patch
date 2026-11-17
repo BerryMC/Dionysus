@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 14:02:49 +0800
+Subject: [PATCH] Fast-path hasEffect for entities without effects
+
+EntityLiving.hasEffect is consulted on hot per-tick paths (breathing,
+fire damage, potion applicability) for every living entity. Most
+entities carry no potion effects, so guarding the HashMap lookup with
+an isEmpty() check (a size read) skips the hash+probe entirely.
+Behavior identical for any key containment result.
+
+Based on Leaf's 'Optimize map lookups with isEmpty check' pattern.
+
+diff --git a/src/main/java/net/minecraft/server/EntityLiving.java b/src/main/java/net/minecraft/server/EntityLiving.java
+index 75c1681fc7b9dbb406758eae68d70f80810578b3..da3d272cf4a6c1e81e311635ed800bafcbd46460 100644
+--- a/src/main/java/net/minecraft/server/EntityLiving.java
++++ b/src/main/java/net/minecraft/server/EntityLiving.java
+@@ -689,7 +689,9 @@ public abstract class EntityLiving extends Entity {
+     }
+ 
+     public boolean hasEffect(MobEffectList mobeffectlist) {
+-        return this.effects.containsKey(mobeffectlist);
++        // Dionysus start - most entities have no effects at all; skip the hash lookup
++        return !this.effects.isEmpty() && this.effects.containsKey(mobeffectlist);
++        // Dionysus end
+     }
+ 
+     @Nullable

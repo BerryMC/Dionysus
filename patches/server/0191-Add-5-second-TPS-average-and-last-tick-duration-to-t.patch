@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 14:03:16 +0800
+Subject: [PATCH] Add 5-second TPS average and last tick duration to /tps
+
+- Track a 5s TPS bucket (RollingAverage of five one-second samples,
+  like the existing 1m/5m/15m buckets) alongside lastTickDuration
+  measured around the tick itself, and show both in /tps output.
+  The Bukkit getTPS() API array is untouched for plugin compatibility.
+- Based on Leaf's '5 second TPS average' and 'Measure last tick time'.
+
+diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
+index 87be59f381d5676efb3a1df0646fa1119a116bd3..ab15231bbe1800956701f5ff4fc7c5c012ce780b 100644
+--- a/src/main/java/net/minecraft/server/MinecraftServer.java
++++ b/src/main/java/net/minecraft/server/MinecraftServer.java
+@@ -573,6 +573,8 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+     public final RollingAverage tps1 = new RollingAverage(60);
+     public final RollingAverage tps5 = new RollingAverage(60 * 5);
+     public final RollingAverage tps15 = new RollingAverage(60 * 15);
++    public final RollingAverage tps5s = new RollingAverage(5); // Dionysus - 5 second average
++    public long lastTickDuration = 0L; // Dionysus - duration of the last executed tick in nanoseconds
+     public double[] recentTps = new double[3]; // Paper - Fine have your darn compat with bad plugins
+ 
+     public static class RollingAverage {
+@@ -670,6 +672,7 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+                         tps1.add(currentTps, diff);
+                         tps5.add(currentTps, diff);
+                         tps15.add(currentTps, diff);
++                        tps5s.add(currentTps, diff); // Dionysus - 5 second average
+                         // Backwards compat with bad plugins
+                         recentTps[0] = tps1.getAverage();
+                         recentTps[1] = tps5.getAverage();
+@@ -679,7 +682,11 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+                     }
+                     lastTick = curTime;
+ 
++                    // Dionysus start - measure the duration of the last executed tick
++                    long tickStartTime = System.nanoTime();
+                     this.C();
++                    this.lastTickDuration = System.nanoTime() - tickStartTime;
++                    // Dionysus end
+                     this.Q = true;
+                 }
+                 // Spigot end
+diff --git a/src/main/java/org/spigotmc/TicksPerSecondCommand.java b/src/main/java/org/spigotmc/TicksPerSecondCommand.java
+index ea94666d9de0c4eecb163ddbdcae089b0245b01f..85973d7295b3b68115e6c72aca9f28210f0cebee 100644
+--- a/src/main/java/org/spigotmc/TicksPerSecondCommand.java
++++ b/src/main/java/org/spigotmc/TicksPerSecondCommand.java
+@@ -32,6 +32,11 @@ public class TicksPerSecondCommand extends Command
+         }
+         sender.sendMessage( ChatColor.GOLD + "TPS from last 1m, 5m, 15m: " + org.apache.commons.lang.StringUtils.join(tpsAvg, ", "));
+         // Paper end
++        // Dionysus start - 5 second average and last tick duration
++        double tps5s = net.minecraft.server.MinecraftServer.getServer().tps5s.getAverage();
++        sender.sendMessage( ChatColor.GOLD + "TPS from last 5s: " + format( tps5s ) );
++        sender.sendMessage( ChatColor.GOLD + "Last tick: " + String.format( "%.1f", net.minecraft.server.MinecraftServer.getServer().lastTickDuration / 1.0E6D ) + "ms" );
++        // Dionysus end
+ 
+         return true;
+     }

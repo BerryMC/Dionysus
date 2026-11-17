@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 14:02:33 +0800
+Subject: [PATCH] Avoid cloning the direction values array for random
+ directions
+
+EnumDirection.a(Random) called values() twice per invocation, cloning
+the static direction array twice for one random pick. Use the cached
+EnumDirection.n array (same contents and order, filled once in the
+static initializer) instead. Based on Leaf's 'Lithium fast util'
+direction optimization.
+
+diff --git a/src/main/java/net/minecraft/server/EnumDirection.java b/src/main/java/net/minecraft/server/EnumDirection.java
+index cf3db56cfea38b8d5eab40286810579c91cc836d..f72e1c2e367ef01806a13d04de030f1a023d3a74 100644
+--- a/src/main/java/net/minecraft/server/EnumDirection.java
++++ b/src/main/java/net/minecraft/server/EnumDirection.java
+@@ -133,7 +133,9 @@ public enum EnumDirection implements INamable {
+     }
+ 
+     public static EnumDirection a(Random random) {
+-        return values()[random.nextInt(values().length)];
++        // Dionysus start - pick from the cached array instead of cloning the values() array twice per call
++        return EnumDirection.n[random.nextInt(EnumDirection.n.length)];
++        // Dionysus end
+     }
+ 
+     public String toString() {
