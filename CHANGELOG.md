@@ -9,7 +9,7 @@ All notable changes to this project will be documented in this file.
 
 ### Performance
 
-* Cache path-node type classification in `PathfinderNormal` (pathfinding hot path)
+* Import `PathfinderNormal` and cache its path-node type classification (pathfinding hot path)
 * Cache `EnumDirection.values()` across NMS hot paths (light BFS, redstone, fire spread)
 * Cache `BlockPosition` hash codes; reuse mutable positions in the light BFS
 * Optimize the scheduled-tick processing loop (single `pollFirst`, fewer allocations)

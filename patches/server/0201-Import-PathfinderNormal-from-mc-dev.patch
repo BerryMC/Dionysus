@@ -1,34 +1,18 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: BerryMC <148406068+BerryMC@users.noreply.github.com>
-Date: Tue, 17 Nov 2026 21:25:11 +0800
-Subject: [PATCH] Cache path-node type classification in PathfinderNormal
+Date: Tue, 17 Nov 2026 23:11:08 +0800
+Subject: [PATCH] Import PathfinderNormal from mc-dev
 
-PathfinderNormal#b (LandPathNodeMaker's getNodeTypeFromNeighbors) rebuilt
-its long block/material/property decision chain on every single path node
-evaluation. Split it in two:
-
-- The world-independent prefix (material checks, block instanceof tests,
-  door/fence-gate/trapdoor state properties) is a pure function of the
-  IBlockData, so it is cached in a concurrent map. IBlockData instances are
-  interned per block state at registry init, so the map holds at most one
-  entry per state and never grows with world size.
-- The final Block#b(world, pos) call stays dynamic; states that reach it are
-  recorded in a separate set so no PathType constant has to act as a
-  sentinel (every enum constant is a legitimate result).
-
-Equivalence verified against the original implementation via a temporary
-reference hook (since removed): all 2473 registered block states produce
-identical results, plus 200k randomized state/position combinations.
-
-Unlike Beast's version this keeps the dynamic Block#b check, so behaviour is
-unchanged for blocks whose walkability depends on world state.
+Pulled in from the decompiled vanilla sources so the following commit can
+patch it. Matches the importmcdev set for any other NMS file touched by
+the patch stack.
 
 diff --git a/src/main/java/net/minecraft/server/PathfinderNormal.java b/src/main/java/net/minecraft/server/PathfinderNormal.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..64c6521a920abc7e9f0e5f12881db4b6a0471225
+index 0000000000000000000000000000000000000000..63eab603805d77489384fa1ec5da2a93c45eaa3b
 --- /dev/null
 +++ b/src/main/java/net/minecraft/server/PathfinderNormal.java
-@@ -0,0 +1,419 @@
+@@ -0,0 +1,355 @@
 +package net.minecraft.server;
 +
 +import com.google.common.collect.Sets;
@@ -38,53 +22,6 @@ index 0000000000000000000000000000000000000000..64c6521a920abc7e9f0e5f12881db4b6
 +import javax.annotation.Nullable;
 +
 +public class PathfinderNormal extends PathfinderAbstract {
-+
-+    // Dionysus start - cache the world-independent half of the node-type computation
-+    // (block/material/state-property checks). LandPathNodeMaker's chain is a pure function
-+    // of the IBlockData for everything except the final Block#b(world, pos) call, which
-+    // stays dynamic. IBlockData instances are interned per block+properties (BlockStateList
-+    // creates them once at registry init), so this map converges to at most one entry per
-+    // block state and never grows with world size or time.
-+    private static final java.util.Map<IBlockData, PathType> PATH_TYPE_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
-+    // States whose classification depends on Block#b(world, pos) and therefore cannot be
-+    // cached as a PathType. Kept in a separate set so no PathType value has to double as a
-+    // sentinel (every enum constant is a legitimate result).
-+    private static final java.util.Set<IBlockData> PATH_TYPE_DYNAMIC = java.util.concurrent.ConcurrentHashMap.newKeySet();
-+
-+    /** World-independent prefix of vanilla's getNodeTypeFromNeighbors logic. */
-+    private static PathType computeCachedPathType(IBlockData iblockdata) {
-+        Block block = iblockdata.getBlock();
-+        Material material = iblockdata.getMaterial();
-+
-+        if (material == Material.AIR) {
-+            return PathType.OPEN;
-+        } else if (block == Blocks.TRAPDOOR || block == Blocks.IRON_TRAPDOOR || block == Blocks.WATERLILY) {
-+            return PathType.TRAPDOOR;
-+        } else if (block == Blocks.FIRE) {
-+            return PathType.DAMAGE_FIRE;
-+        } else if (block == Blocks.CACTUS) {
-+            return PathType.DAMAGE_CACTUS;
-+        } else if (block instanceof BlockDoor && material == Material.WOOD && !((Boolean) iblockdata.get(BlockDoor.OPEN)).booleanValue()) {
-+            return PathType.DOOR_WOOD_CLOSED;
-+        } else if (block instanceof BlockDoor && material == Material.ORE && !((Boolean) iblockdata.get(BlockDoor.OPEN)).booleanValue()) {
-+            return PathType.DOOR_IRON_CLOSED;
-+        } else if (block instanceof BlockDoor && ((Boolean) iblockdata.get(BlockDoor.OPEN)).booleanValue()) {
-+            return PathType.DOOR_OPEN;
-+        } else if (block instanceof BlockMinecartTrackAbstract) {
-+            return PathType.RAIL;
-+        } else if (block instanceof BlockFence || block instanceof BlockCobbleWall || (block instanceof BlockFenceGate && !((Boolean) iblockdata.get(BlockFenceGate.OPEN)).booleanValue())) {
-+            return PathType.FENCE;
-+        } else if (material == Material.WATER) {
-+            return PathType.WATER;
-+        } else if (material == Material.LAVA) {
-+            return PathType.LAVA;
-+        }
-+
-+        // Everything above is a pure function of the state; the remaining case depends on
-+        // Block#b(world, pos), so it must be evaluated per lookup.
-+        return null;
-+    }
-+    // Dionysus end
 +
 +    protected float j;
 +
@@ -423,28 +360,11 @@ index 0000000000000000000000000000000000000000..64c6521a920abc7e9f0e5f12881db4b6
 +    }
 +
 +    protected PathType b(IBlockAccess iblockaccess, int i, int j, int k) {
-+        // Dionysus start - use the cached world-independent classification, falling back to
-+        // the dynamic check only for the OPEN/BLOCKED case (mirrors vanilla exactly).
 +        BlockPosition blockposition = new BlockPosition(i, j, k);
 +        IBlockData iblockdata = iblockaccess.getType(blockposition);
-+        PathType cached = PATH_TYPE_CACHE.get(iblockdata);
++        Block block = iblockdata.getBlock();
++        Material material = iblockdata.getMaterial();
 +
-+        if (cached == null) {
-+            if (PATH_TYPE_DYNAMIC.contains(iblockdata)) {
-+                return iblockdata.getBlock().b(iblockaccess, blockposition) ? PathType.OPEN : PathType.BLOCKED;
-+            }
-+
-+            cached = computeCachedPathType(iblockdata);
-+
-+            if (cached == null) {
-+                PATH_TYPE_DYNAMIC.add(iblockdata);
-+                return iblockdata.getBlock().b(iblockaccess, blockposition) ? PathType.OPEN : PathType.BLOCKED;
-+            }
-+
-+            PATH_TYPE_CACHE.put(iblockdata, cached);
-+        }
-+
-+        return cached;
-+        // Dionysus end
++        return material == Material.AIR ? PathType.OPEN : (block != Blocks.TRAPDOOR && block != Blocks.IRON_TRAPDOOR && block != Blocks.WATERLILY ? (block == Blocks.FIRE ? PathType.DAMAGE_FIRE : (block == Blocks.CACTUS ? PathType.DAMAGE_CACTUS : (block instanceof BlockDoor && material == Material.WOOD && !((Boolean) iblockdata.get(BlockDoor.OPEN)).booleanValue() ? PathType.DOOR_WOOD_CLOSED : (block instanceof BlockDoor && material == Material.ORE && !((Boolean) iblockdata.get(BlockDoor.OPEN)).booleanValue() ? PathType.DOOR_IRON_CLOSED : (block instanceof BlockDoor && ((Boolean) iblockdata.get(BlockDoor.OPEN)).booleanValue() ? PathType.DOOR_OPEN : (block instanceof BlockMinecartTrackAbstract ? PathType.RAIL : (!(block instanceof BlockFence) && !(block instanceof BlockCobbleWall) && (!(block instanceof BlockFenceGate) || ((Boolean) iblockdata.get(BlockFenceGate.OPEN)).booleanValue()) ? (material == Material.WATER ? PathType.WATER : (material == Material.LAVA ? PathType.LAVA : (block.b(iblockaccess, blockposition) ? PathType.OPEN : PathType.BLOCKED))) : PathType.FENCE))))))) : PathType.TRAPDOOR);
 +    }
 +}
