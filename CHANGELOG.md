@@ -5,29 +5,49 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-* Update netty to 4.1.141.Final (CVE fixes, JDK 21+ compatibility)
-* Add opt-in io_uring transport support (use-io-uring in dionysus.yml, default off)
-* Organize config files under a configs directory (Sponge-style, with one-time automatic migration)
-* Strengthen use-io-uring config warning
-* Silence the timings-disabled startup warnings
-* Avoid cloning the direction values array for random directions
-* Fast-path hasEffect for entities without effects
-* Add 5-second TPS average and last tick duration to /tps
-* Cache EnumDirection.values() across NMS hot paths (light BFS, redstone, fire)
-* Fix four correctness issues found in audit (crop toggle, hopper chunk range, async save flush order, ban date parsing)
-* Add /tpsbar boss bar command (ported from Purpur via Leaf)
-* Add /rambar and /ping commands (ported from Purpur via Leaf)
-* Fix lighting queue starvation during mass block updates (chunks stayed unlit after TNT/explosions)
-* Keep Entity.passengers typed as List for plugin binary compatibility (upstream #133)
-* Fix tool break sound being inaudible to the breaking player (upstream #128)
-* Micro-optimizations: position hashCode caching, light-BFS allocation removal, farmland water-scan loops (from Beast)
-* Fix /tpsbar and /rambar refreshing 20x slower than configured
-* Cache path-node type classification in PathfinderNormal (pathfinding hot path)
+## [0.1.19]
 
-* Add crop and stem growth RNG optimization (`crop.optimize-growth`, default off)
-* Add pathfinding skip when no player is nearby (`pathfinding.optimize`, default off)
-* Add scheduled tick processing optimization (`scheduled-ticks.optimize`, default off)
-* Add minecart-safe hopper suction entity scan skip (`hopper.optimize`, default off)
+### Performance
+
+* Cache path-node type classification in `PathfinderNormal` (pathfinding hot path)
+* Cache `EnumDirection.values()` across NMS hot paths (light BFS, redstone, fire spread)
+* Cache `BlockPosition` hash codes; reuse mutable positions in the light BFS
+* Optimize the scheduled-tick processing loop (single `pollFirst`, fewer allocations)
+* Optimize varint writing in `PacketDataSerializer` (Velocity algorithm)
+* Fast-path `hasEffect` for entities without potion effects
+* Avoid cloning the direction array for random directions
+* Optimize the farmland nearby-water scan (one chunk lookup per column)
+* Optional, behaviour-equivalent toggles, all default off: `crop.optimize-growth`, `pathfinding.optimize`, `scheduled-ticks.optimize`, `hopper.optimize`
+* `-DDionysus.enableFMA=true` for fused-multiply-add entity distance math (default off)
+
+### Fixes
+
+* Fix lighting queue starvation during mass block updates — chunks could stay unlit long after TNT/explosions finished
+* Fix `/tpsbar` and `/rambar` refreshing 20x slower than configured
+* Fix tool break sound being inaudible to the breaking player (upstream #128)
+* Keep `Entity.passengers` typed as `List` for plugin binary compatibility (upstream #133)
+* Do not answer status pings before the server finishes booting (no more false "outdated server")
+* Do not execute commands after the server has stopped
+* Use a thread-safe date formatter for ban lists (fixes off-main parse crashes)
+* Print stack traces when plugins leave async tasks running on reload
+* Fix four issues found in an audit of the new patches: crop toggle was ignored, hopper scan missed chunks at borders, async JSON flush ran too early, ban date parsing rejected `UTC`/`GMT`
+
+### Features
+
+* Organize all server yaml configs under `configs/` (Sponge-style, with one-time automatic migration)
+* Add `/tpsbar`, `/rambar` and `/ping` commands (ported from Purpur via Leaf)
+* Add a 5-second TPS average and last tick duration to `/tps`
+* Save ops/whitelist/ban JSON lists asynchronously (`async-json-list-save`)
+* Skip event construction for `BlockPhysicsEvent`, `PreCreatureSpawnEvent` and `VehicleEntityCollisionEvent` when no plugin listens
+* Optional io_uring network transport on Linux (`use-io-uring`, experimental, default off)
+
+### Dependencies
+
+* Update netty to 4.1.141.Final (CVE fixes, JDK 21+ compatibility)
+
+### Documentation
+
+* Split the configuration reference into [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 
 ## [0.1.18]
 

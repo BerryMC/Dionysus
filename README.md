@@ -21,35 +21,24 @@ You can also [build it yourself](https://github.com/BerryMC/Dionysus#building).
 
 ### Configuration
 
-All server yaml configs live under the `configs/` directory: `bukkit.yml`, `spigot.yml`, `paper.yml`, `commands.yml`, `help.yml` and `dionysus.yml`. Legacy root-level files are migrated automatically on first start. `server.properties`, `eula.txt` and the JSON data files (ops, whitelist, bans, usercache) stay in the server root.
+All server yaml configs live in `configs/` (`bukkit.yml`, `spigot.yml`, `paper.yml`, `commands.yml`, `help.yml`, `dionysus.yml`). Legacy root-level files are migrated automatically on first start. See **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)** for the full reference.
 
-Notable `configs/dionysus.yml` options (everything is optional and keeps vanilla behavior unless stated otherwise):
+Dionysus' own options are in `configs/dionysus.yml`. The defaults change nothing, except `egg-can-knockback` (on) which makes thrown eggs knock players back. Optional performance toggles that are off by default: `crop.optimize-growth`, `pathfinding.optimize`, `scheduled-ticks.optimize`, `hopper.optimize`, and `use-io-uring` (experimental).
 
-| Option | Default | Description |
-|---|---|---|
-| `crop.optimize-growth` | `false` | Single-RNG-call crop/stem growth rolls |
-| `pathfinding.optimize` | `false` | Skip A* pathfinding when no player is nearby (`pathfinding.max-player-distance`) |
-| `scheduled-ticks.optimize` | `false` | Faster scheduled tick (NextTickListEntry) processing loop |
-| `hopper.optimize` | `false` | Skip hopper suction entity scans when provably empty (minecart-safe) |
-| `async-json-list-save` | `true` | Save ops/whitelist/ban JSON lists asynchronously |
-| `egg-can-knockback` | `true` | Thrown eggs knock back players (changes vanilla combat) |
-| `use-io-uring` | `false` | Experimental io_uring transport — do not enable unless you know what it is |
-| `light-updates-max-ms-per-tick` | `10` | Soft per-tick lighting budget in ms; the queue always processes at least 64 entries per chunk per tick so backlogs drain |
-| `tpsbar.*` | `enabled: true` | `/tpsbar` boss bar: tick interval, title with `<tps>`/`<mspt>`/`<ping>`, fill mode, colors |
-| `rambar.*` | `enabled: true` | `/rambar` boss bar: heap usage with `<used>`/`<xmx>`/`<percent>`/`<allocated>`/`<xms>` |
-| `ping-command.enabled` | `true` | `/ping [player]` latency command |
+Useful JVM flags:
 
-JVM flags: `-DDionysus.enableFMA=true` accelerates entity distance math with fused multiply-add; `--add-modules=jdk.incubator.vector` enables the SIMD optimizations on Java 17/18.
+- `-DDionysus.enableFMA=true` — fused multiply-add in entity distance math (off by default)
+- `--add-modules=jdk.incubator.vector` — enables SIMD optimisations on Java 17/18
 
 ### Commands
 
 | Command | Permission | Description |
 |---|---|---|
-| `/dionysus [reload\|version]` | `bukkit.command.dionysus` | Reload the Dionysus config / show version |
-| `/tpsbar [on\|off\|toggle]` | `dionysus.command.tpsbar` | Toggle a boss bar showing live TPS/MSPT/ping |
-| `/rambar [on\|off\|toggle]` | `dionysus.command.rambar` | Toggle a boss bar showing heap usage |
-| `/ping [player]` | `dionysus.command.ping` / `.other` | Show connection latency (own or another player's) |
-| `/tps` | `bukkit.command.tps` | TPS over 1m/5m/15m plus a 5-second average and last tick duration |
+| `/dionysus [reload\|version]` | `bukkit.command.dionysus` | Reload the config / show version |
+| `/tpsbar [on\|off\|toggle]` | `dionysus.command.tpsbar` | Boss bar with live TPS/MSPT/ping |
+| `/rambar [on\|off\|toggle]` | `dionysus.command.rambar` | Boss bar with heap usage |
+| `/ping [player]` | `dionysus.command.ping` / `.other` | Connection latency |
+| `/tps` | `bukkit.command.tps` | TPS 1m/5m/15m, 5-second average, last tick time |
 
 ## Contributing
 
