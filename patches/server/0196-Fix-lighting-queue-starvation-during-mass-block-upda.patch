@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 18:20:41 +0800
+Subject: [PATCH] Fix lighting queue starvation during mass block updates
+
+The per-tick lighting budget was computed as 'maxLightTimePerTick minus
+time already spent in this tick'. During a TNT burst the lighting work
+itself inflates MSPT, so the remaining budget shrank to zero and
+processQueue returned immediately - every tick. The queue then never
+drained and chunks stayed visually unlit long after the explosion
+finished, even though the server was healthy again.
+
+Two changes make the design robust:
+
+- The budget is now a SOFT limit: it is no longer reduced by elapsed
+  tick time, so lighting progresses even on slow ticks.
+- A hard floor of MIN_ENTRIES_PER_TICK (64) entries per chunk per tick
+  is applied before the time check, so a backlog always drains no
+  matter how slow the tick is.
+
+A zero/negative configured budget now falls back to the hard quota
+only instead of skipping processing entirely, and the config comment
+documents both behaviors.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index 25d75d83f63e2e83f24b872b717b8e2775ee9720..4afe569f3ad85b0449b22fc2ef2915eaf6714a9c 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -175,7 +175,12 @@ public class DionysusConfig {
+ 
+     public static int maxLightTimePerTick = 10;
+     private static void maxLightTimePerTickMs() {
+-        maxLightTimePerTick = getInt("light-updates-max-ms-per-tick", maxLightTimePerTick) * 1000000;
++        maxLightTimePerTick = getInt("light-updates-max-ms-per-tick", maxLightTimePerTick, """
++                Soft time budget for the per-tick lighting queue, in milliseconds
++                (0 or negative = no time limit). This is a SOFT limit: every tick the
++                queue additionally processes at least 64 entries per chunk, so a large
++                burst of light updates (TNT, explosions, mass block changes) always
++                drains instead of starving when ticks are already slow.""") * 1000000;
+     }
+ 
+     public static boolean limitLightChunkUnload = false;
+diff --git a/src/main/java/net/minecraft/server/DionysusLightingQueue.java b/src/main/java/net/minecraft/server/DionysusLightingQueue.java
+index aea8d7e68d6ec4b2466c353c23720062252264ad..1b3ed573398cdf0d6dbf21aa742c59fb759f8157 100644
+--- a/src/main/java/net/minecraft/server/DionysusLightingQueue.java
++++ b/src/main/java/net/minecraft/server/DionysusLightingQueue.java
+@@ -7,12 +7,27 @@ import it.unimi.dsi.fastutil.objects.ObjectCollection;
+ import org.apache.commons.lang3.tuple.Triple;
+ 
+ final class DionysusLightingQueue {
++
++    /**
++     * Dionysus - minimum lighting-queue entries processed per tick per chunk, applied
++     * even when the soft time budget is exhausted. Guarantees a backlog always drains.
++     */
++    private static final int MIN_ENTRIES_PER_TICK = 64;
++
+     static void processQueue(long curTime) {
+         final long startTime = System.nanoTime();
+-        final long maxTickTime = DionysusConfig.maxLightTimePerTick - (startTime - curTime);
++        // Dionysus - the tick budget is a SOFT limit used only to spread work across
++        // ticks. It must not be reduced by time already spent in this tick: during a
++        // TNT/explosion burst the lighting work itself inflates MSPT, which used to
++        // shrink the remaining budget to zero and starve the queue forever (chunks
++        // stayed visually unlit long after the explosion). A hard per-tick minimum
++        // (see MIN_ENTRIES_PER_TICK) now guarantees forward progress regardless.
++        long maxTickTime = DionysusConfig.maxLightTimePerTick;
+ 
+         if (maxTickTime <= 0) {
+-            return;
++            // Misconfigured (0 or negative ms): fall back to the hard quota only, so a
++            // backlog still drains instead of building up forever.
++            maxTickTime = Long.MAX_VALUE;
+         }
+ 
+         START:
+@@ -51,16 +66,19 @@ final class DionysusLightingQueue {
+             if (updates.isEmpty() && replacementUpdates.isEmpty()) {
+                 return false;
+             }
+-            if (isOutOfTime(maxTickTime, startTime)) {
+-                return true;
+-            }
++            // Dionysus - hard progress floor: even when the soft time budget is already
++            // exhausted (e.g. a slow tick), always process at least this many entries so
++            // a backlog can never become permanent.
++            int remainingQuota = MIN_ENTRIES_PER_TICK;
++
+             try (Timing ignored = chunk.world.timings.lightingQueueTimer.startTiming()) {
+                 int i;
+                 for (i = 0; i < replacementUpdates.size(); i++) {
+-                    if (isOutOfTime(maxTickTime, startTime)) {
++                    if (remainingQuota <= 0 && isOutOfTime(maxTickTime, startTime)) {
+                         replacementUpdates.removeElements(0, i);
+                         return true;
+                     }
++                    remainingQuota--;
+ 
+                     Triple<BlockPosition, IBlockData,  IBlockData> triple = replacementUpdates.get(i);
+                     chunk.updateReplacementLight(triple.getLeft(), triple.getMiddle(), triple.getRight());
+@@ -68,10 +86,11 @@ final class DionysusLightingQueue {
+                 replacementUpdates.clear();
+ 
+                 for (i = 0; i < updates.size(); i++) {
+-                    if (isOutOfTime(maxTickTime, startTime)) {
++                    if (remainingQuota <= 0 && isOutOfTime(maxTickTime, startTime)) {
+                         updates.removeElements(0, i);
+                         return true;
+                     }
++                    remainingQuota--;
+ 
+                     BlockPosition blockPos = updates.get(i);
+                     chunk.world.updateLightingAtBlockPos(blockPos, chunk);
