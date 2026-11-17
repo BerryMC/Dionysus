@@ -18,6 +18,8 @@ All notable changes to this project will be documented in this file.
 * Add /tpsbar boss bar command (ported from Purpur via Leaf)
 * Add /rambar and /ping commands (ported from Purpur via Leaf)
 * Fix lighting queue starvation during mass block updates (chunks stayed unlit after TNT/explosions)
+* Keep Entity.passengers typed as List for plugin binary compatibility (upstream #133)
+* Fix tool break sound being inaudible to the breaking player (upstream #128)
 
 * Add crop and stem growth RNG optimization (`crop.optimize-growth`, default off)
 * Add pathfinding skip when no player is nearby (`pathfinding.optimize`, default off)

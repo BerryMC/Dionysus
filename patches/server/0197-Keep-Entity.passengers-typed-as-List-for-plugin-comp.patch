@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 18:49:20 +0800
+Subject: [PATCH] Keep Entity.passengers typed as List for plugin compatibility
+
+Patch 0130 changed the field declaration from List<Entity> to
+ObjectArrayList<Entity>. Field types are part of the binary contract:
+plugins (and NMS-touching libraries) resolving it as
+'Lnet/minecraft/server/Entity;.passengers:Ljava/util/List;' failed at
+runtime with NoSuchFieldError: passengers.
+
+Restore the List<Entity> declaration and keep ObjectArrayList only as
+the runtime implementation, which retains the fastutil allocation win
+without breaking binary compatibility. All in-tree uses go through
+plain List methods (size/get/isEmpty), so nothing else changes.
+
+This is upstream issue #133.
+
+diff --git a/src/main/java/net/minecraft/server/Entity.java b/src/main/java/net/minecraft/server/Entity.java
+index b1b413888a6d274d4ddb6d1cfbc1877a6a81dd0d..6dd3fd83451223e5243d44538acae88b55fdf089 100644
+--- a/src/main/java/net/minecraft/server/Entity.java
++++ b/src/main/java/net/minecraft/server/Entity.java
+@@ -99,7 +99,7 @@ public abstract class Entity implements ICommandListener, KeyedObject { // Paper
+     private static int entityCount = 1; // Paper - MC-111480 - ID 0 is treated as special for DataWatchers, start 1
+     private int id;
+     public boolean i; public boolean blocksEntitySpawning() { return i; } // Paper - OBFHELPER
+-    public final ObjectArrayList<Entity> passengers; // Dionysus
++    public final List<Entity> passengers; // Dionysus - keep the List type for binary compatibility with plugins
+     protected int j;
+     private Entity au;public void setVehicle(Entity entity) { this.au = entity; } // Paper // OBFHELPER
+     public boolean attachedToPlayer;
+@@ -219,7 +219,7 @@ public abstract class Entity implements ICommandListener, KeyedObject { // Paper
+ 
+     public Entity(World world) {
+         this.id = Entity.entityCount++;
+-        this.passengers = new ObjectArrayList<>(); // Dionysus
++        this.passengers = new ObjectArrayList<>(); // Dionysus - fastutil implementation behind the List interface
+         this.boundingBox = Entity.c;
+         this.width = 0.6F;
+         this.length = 1.8F;

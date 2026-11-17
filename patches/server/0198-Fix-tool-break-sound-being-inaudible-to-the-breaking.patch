@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 18:53:46 +0800
+Subject: [PATCH] Fix tool break sound being inaudible to the breaking player
+
+ItemStack#damage calls EntityLiving#b(ItemStack) on break, which played
+the sound via Entity#[a](SoundEffect, ...). For players that override
+dispatches to World#a(this, ...) - passing the player as the excluded
+source entity - and PlayerList#sendPacketNearby skips the source player.
+Result: the player breaking their own tool never heard it (the
+upstream issue #128 'Tool break sound/animation').
+
+Broadcast the sound by world position with a null source so the
+breaking player is included. The held-item particle burst is unchanged.
+
+Based on the report in nopjmp/Dionysus#128.
+
+diff --git a/src/main/java/net/minecraft/server/EntityLiving.java b/src/main/java/net/minecraft/server/EntityLiving.java
+index da3d272cf4a6c1e81e311635ed800bafcbd46460..53bf315a7310fb947c4e71783d6da0ae40eb4cdd 100644
+--- a/src/main/java/net/minecraft/server/EntityLiving.java
++++ b/src/main/java/net/minecraft/server/EntityLiving.java
+@@ -1109,7 +1109,12 @@ public abstract class EntityLiving extends Entity {
+     }
+ 
+     public void b(ItemStack itemstack) {
+-        this.a(SoundEffects.dw, 0.8F, 0.8F + this.world.random.nextFloat() * 0.4F);
++        // Dionysus start - vanilla routes this through EntityHuman#a(SoundEffect, ...) which
++        // passes the player as the "source" entity; PlayerList#sendPacketNearby then excludes
++        // that entity, so a player breaking their own tool never hears the sound.
++        // Broadcast by world position with a null source instead, which includes everyone.
++        this.world.a((EntityHuman) null, this.locX, this.locY, this.locZ, SoundEffects.dw, this.bK(), 0.8F, 0.8F + this.world.random.nextFloat() * 0.4F);
++        // Dionysus end
+ 
+         for (int i = 0; i < 5; ++i) {
+             Vec3D vec3d = new Vec3D(((double) this.random.nextFloat() - 0.5D) * 0.1D, Math.random() * 0.1D + 0.1D, 0.0D);
