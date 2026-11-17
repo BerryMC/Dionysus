@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 * Cache EnumDirection.values() across NMS hot paths (light BFS, redstone, fire)
 * Fix four correctness issues found in audit (crop toggle, hopper chunk range, async save flush order, ban date parsing)
 * Add /tpsbar boss bar command (ported from Purpur via Leaf)
+* Add /rambar and /ping commands (ported from Purpur via Leaf)
 
 * Add crop and stem growth RNG optimization (`crop.optimize-growth`, default off)
 * Add pathfinding skip when no player is nearby (`pathfinding.optimize`, default off)

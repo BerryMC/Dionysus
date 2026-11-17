@@ -1,0 +1,456 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 17:20:17 +0800
+Subject: [PATCH] Add /rambar and /ping commands
+
+Port the remaining Purpur status commands (via Leaf):
+
+- RamBarTask/RamBarCommand: per-player boss bar showing heap usage.
+  Progress is used/max with color thresholds at 50%/75%; the title
+  supports <allocated>/<used>/<xmx>/<xms>/<percent> and byte values use
+  Purpur's BKMGTPE formatting. Config: rambar.enabled, tick-interval,
+  title, progress-color {good,medium,low}.
+- PingCommand: /ping [player] shows latency; others require
+  dionysus.command.ping.other. Config: ping-command.enabled.
+
+Both bars are driven from the same tick-loop hook as /tpsbar, since
+1.12.2 has no Bukkit plugin wrapper to own a scheduler task. Ping uses
+Player.Spigot#getPing (not on the Player interface in 1.12.2).
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusCommand.java b/src/main/java/dev/pomf/dionysus/DionysusCommand.java
+index 8b8cecefb06c474a40449407231587763d29b196..f3ed1a0043122a554a43a7125ef15cc8a91dac9d 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusCommand.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusCommand.java
+@@ -1,5 +1,8 @@
+ package dev.pomf.dionysus;
+ 
++import dev.pomf.dionysus.command.PingCommand;
++import dev.pomf.dionysus.command.RamBarCommand;
++import dev.pomf.dionysus.command.RamBarTask;
+ import dev.pomf.dionysus.command.TPSBarCommand;
+ import dev.pomf.dionysus.command.TPSBarTask;
+ import net.minecraft.server.MinecraftServer;
+@@ -30,7 +33,16 @@ public class DionysusCommand extends Command {
+         // Dionysus start - /tpsbar boss bar (ported from Purpur via Leaf)
+         if (DionysusConfig.tpsBarEnabled) {
+             TPSBarTask.INSTANCE = new TPSBarTask();
+-            MinecraftServer.getServer().server.getCommandMap().register("dionysus", "Dionysus", new TPSBarCommand(TPSBarTask.INSTANCE));
++            MinecraftServer.getServer().server.getCommandMap().register("Dionysus", new TPSBarCommand(TPSBarTask.INSTANCE));
++        }
++
++        if (DionysusConfig.ramBarEnabled) {
++            RamBarTask.INSTANCE = new RamBarTask();
++            MinecraftServer.getServer().server.getCommandMap().register("Dionysus", new RamBarCommand(RamBarTask.INSTANCE));
++        }
++
++        if (DionysusConfig.pingCommandEnabled) {
++            MinecraftServer.getServer().server.getCommandMap().register("Dionysus", new PingCommand());
+         }
+         // Dionysus end
+     }
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index 36796524740b5baceaaed625051679e1a2e5ecb0..25d75d83f63e2e83f24b872b717b8e2775ee9720 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -534,5 +534,33 @@ public class DionysusConfig {
+         tpsBarTextColorMedium = TPSBarTextColor.valueOf(getString("tpsbar.text-color.medium", tpsBarTextColorMedium.name()));
+         tpsBarTextColorLow = TPSBarTextColor.valueOf(getString("tpsbar.text-color.low", tpsBarTextColorLow.name()));
+     }
++
++    public static boolean ramBarEnabled = true;
++    public static int ramBarTickInterval = 20;
++    public static String ramBarTitle = "<used>/<xmx> (<percent>)";
++    public static TPSBarColor ramBarColorGood = TPSBarColor.GREEN;
++    public static TPSBarColor ramBarColorMedium = TPSBarColor.YELLOW;
++    public static TPSBarColor ramBarColorLow = TPSBarColor.RED;
++
++    private static void ramBar() {
++        ramBarEnabled = getBoolean("rambar.enabled", ramBarEnabled, """
++                Allow players with dionysus.command.rambar to toggle a boss bar
++                showing live heap usage via /rambar.""");
++        ramBarTickInterval = getInt("rambar.tick-interval", ramBarTickInterval, """
++                How many server ticks between boss bar refreshes (20 = once a second).""");
++        ramBarTitle = getString("rambar.title", ramBarTitle, """
++                Title format. Placeholders: <allocated>, <used>, <xmx>, <xms>, <percent>.""");
++        ramBarColorGood = TPSBarColor.valueOf(getString("rambar.progress-color.good", ramBarColorGood.name()));
++        ramBarColorMedium = TPSBarColor.valueOf(getString("rambar.progress-color.medium", ramBarColorMedium.name()));
++        ramBarColorLow = TPSBarColor.valueOf(getString("rambar.progress-color.low", ramBarColorLow.name()));
++    }
++
++    public static boolean pingCommandEnabled = true;
++
++    private static void pingCommand() {
++        pingCommandEnabled = getBoolean("ping-command.enabled", pingCommandEnabled, """
++                Enable /ping, which shows connection latency (own or, with
++                dionysus.command.ping.other, another player's).""");
++    }
+     // Dionysus end
+ }
+diff --git a/src/main/java/dev/pomf/dionysus/command/PingCommand.java b/src/main/java/dev/pomf/dionysus/command/PingCommand.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..387c0dbdb0ced20f9855272695407e3576ba1b1d
+--- /dev/null
++++ b/src/main/java/dev/pomf/dionysus/command/PingCommand.java
+@@ -0,0 +1,86 @@
++package dev.pomf.dionysus.command;
++
++import dev.pomf.dionysus.DionysusConfig;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import org.bukkit.Bukkit;
++import org.bukkit.ChatColor;
++import org.bukkit.command.Command;
++import org.bukkit.command.CommandSender;
++import org.bukkit.entity.Player;
++
++/**
++ * /ping [player] - shows connection latency, ported from Purpur's /ping (via Leaf).
++ */
++public final class PingCommand extends Command {
++
++    public PingCommand() {
++        super("ping");
++
++        this.description = "Shows a player's connection latency";
++        this.usageMessage = "/ping [player]";
++        this.setPermission("dionysus.command.ping");
++    }
++
++    @Override
++    public boolean execute(CommandSender sender, String label, String[] args) {
++        if (!DionysusConfig.pingCommandEnabled) {
++            sender.sendMessage(ChatColor.RED + "The ping command is disabled on this server.");
++            return true;
++        }
++
++        List<Player> targets = new ArrayList<>();
++
++        if (args.length == 0) {
++            if (!(sender instanceof Player)) {
++                sender.sendMessage("Usage: " + this.usageMessage);
++                return true;
++            }
++
++            targets.add((Player) sender);
++        } else {
++            if (!sender.hasPermission("dionysus.command.ping.other")) {
++                sender.sendMessage(ChatColor.RED + "You do not have permission to check other players.");
++                return true;
++            }
++
++            Player target = Bukkit.getPlayerExact(args[0]);
++
++            if (target == null) {
++                sender.sendMessage(ChatColor.RED + "Player '" + args[0] + "' is not online.");
++                return true;
++            }
++
++            targets.add(target);
++        }
++
++        if (!testPermission(sender)) {
++            return true;
++        }
++
++        for (Player target : targets) {
++            sender.sendMessage(ChatColor.GREEN + target.getName() + ": " + target.spigot().getPing() + "ms");
++        }
++
++        return true;
++    }
++
++    @Override
++    public List<String> tabComplete(CommandSender sender, String alias, String[] args) {
++        if (args.length == 1 && sender.hasPermission("dionysus.command.ping.other")) {
++            List<String> names = new ArrayList<>();
++
++            for (Player player : Bukkit.getOnlinePlayers()) {
++                if (player.getName().toLowerCase(java.util.Locale.ROOT)
++                        .startsWith(args[0].toLowerCase(java.util.Locale.ROOT))) {
++                    names.add(player.getName());
++                }
++            }
++
++            return names;
++        }
++
++        return Collections.emptyList();
++    }
++}
+diff --git a/src/main/java/dev/pomf/dionysus/command/RamBarCommand.java b/src/main/java/dev/pomf/dionysus/command/RamBarCommand.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..009c8559995a2c76f972fef66ec28997ea5011b1
+--- /dev/null
++++ b/src/main/java/dev/pomf/dionysus/command/RamBarCommand.java
+@@ -0,0 +1,88 @@
++package dev.pomf.dionysus.command;
++
++import dev.pomf.dionysus.DionysusConfig;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import org.bukkit.ChatColor;
++import org.bukkit.command.Command;
++import org.bukkit.command.CommandSender;
++import org.bukkit.entity.Player;
++
++/**
++ * /rambar [on|off|toggle] - toggles the heap-usage boss bar for the executing player.
++ * Ported from Purpur's /rambar (via Leaf); see RamBarTask for the rendering.
++ */
++public final class RamBarCommand extends Command {
++
++    private final RamBarTask task;
++
++    public RamBarCommand(RamBarTask task) {
++        super("rambar");
++
++        this.task = task;
++        this.description = "Toggles a boss bar showing server heap usage";
++        this.usageMessage = "/rambar [on|off|toggle]";
++        this.setPermission("dionysus.command.rambar");
++    }
++
++    @Override
++    public boolean execute(CommandSender sender, String label, String[] args) {
++        if (!(sender instanceof Player)) {
++            sender.sendMessage("This command can only be used by a player.");
++            return true;
++        }
++
++        if (!DionysusConfig.ramBarEnabled) {
++            sender.sendMessage(ChatColor.RED + "The RAM bar is disabled on this server.");
++            return true;
++        }
++
++        Player player = (Player) sender;
++
++        if (!testPermission(sender)) {
++            return true;
++        }
++
++        boolean shown;
++
++        if (args.length == 0 || args[0].equalsIgnoreCase("toggle")) {
++            shown = this.task.togglePlayer(player);
++        } else if (args[0].equalsIgnoreCase("on")) {
++            if (this.task.hasPlayer(player)) {
++                shown = true;
++            } else {
++                shown = this.task.togglePlayer(player);
++            }
++        } else if (args[0].equalsIgnoreCase("off")) {
++            if (this.task.hasPlayer(player)) {
++                shown = !this.task.togglePlayer(player);
++            } else {
++                shown = false;
++            }
++        } else {
++            player.sendMessage(ChatColor.RED + "Usage: " + this.usageMessage);
++            return true;
++        }
++
++        player.sendMessage(ChatColor.GREEN + "RAM bar " + (shown ? "enabled" : "disabled") + ".");
++        return true;
++    }
++
++    @Override
++    public List<String> tabComplete(CommandSender sender, String alias, String[] args) {
++        if (args.length == 1) {
++            List<String> options = new ArrayList<>();
++
++            for (String option : new String[] { "on", "off", "toggle" }) {
++                if (option.startsWith(args[0].toLowerCase(java.util.Locale.ROOT))) {
++                    options.add(option);
++                }
++            }
++
++            return options;
++        }
++
++        return Collections.emptyList();
++    }
++}
+diff --git a/src/main/java/dev/pomf/dionysus/command/RamBarTask.java b/src/main/java/dev/pomf/dionysus/command/RamBarTask.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..d97e589e36fe5be9048a495b92203760be0f90db
+--- /dev/null
++++ b/src/main/java/dev/pomf/dionysus/command/RamBarTask.java
+@@ -0,0 +1,161 @@
++package dev.pomf.dionysus.command;
++
++import dev.pomf.dionysus.DionysusConfig;
++import java.lang.management.ManagementFactory;
++import java.lang.management.MemoryUsage;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.Map;
++import java.util.UUID;
++import org.bukkit.Bukkit;
++import org.bukkit.boss.BarColor;
++import org.bukkit.boss.BarStyle;
++import org.bukkit.boss.BossBar;
++import org.bukkit.entity.Player;
++
++/**
++ * Per-player boss bar showing heap usage, ported from Purpur's /rambar (via Leaf).
++ * Driven from the server tick loop like {@link TPSBarTask}.
++ */
++public final class RamBarTask implements Runnable {
++
++    /** Dionysus - server-wide instance, driven from the tick loop. */
++    public static RamBarTask INSTANCE;
++
++    private final Map<UUID, BossBar> bossbars = new HashMap<>();
++    private long allocated;
++    private long used;
++    private long max;
++    private long init;
++    private float percent;
++    private int tick;
++
++    public boolean hasPlayer(Player player) {
++        return this.bossbars.containsKey(player.getUniqueId());
++    }
++
++    public boolean togglePlayer(Player player) {
++        if (removePlayer(player)) {
++            return false;
++        }
++
++        addPlayer(player);
++        return true;
++    }
++
++    public void addPlayer(Player player) {
++        removePlayer(player);
++
++        BossBar bossbar = Bukkit.createBossBar("", getBossBarColor(), BarStyle.SOLID);
++
++        this.bossbars.put(player.getUniqueId(), bossbar);
++        updateBossBar(bossbar);
++        bossbar.addPlayer(player);
++    }
++
++    public boolean removePlayer(Player player) {
++        BossBar bossbar = this.bossbars.remove(player.getUniqueId());
++
++        if (bossbar != null) {
++            bossbar.removePlayer(player);
++            return true;
++        }
++
++        return false;
++    }
++
++    public void removeAll() {
++        for (BossBar bossbar : new HashSet<>(this.bossbars.values())) {
++            bossbar.removeAll();
++        }
++
++        this.bossbars.clear();
++    }
++
++    @Override
++    public void run() {
++        if (++this.tick < Math.max(1, DionysusConfig.ramBarTickInterval)) {
++            return;
++        }
++
++        this.tick = 0;
++
++        MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
++
++        this.allocated = heap.getCommitted();
++        this.used = heap.getUsed();
++        this.max = heap.getMax();
++        this.init = heap.getInit();
++        this.percent = this.max <= 0L ? 0.0F : Math.max(Math.min((float) this.used / (float) this.max, 1.0F), 0.0F);
++
++        Iterator<Map.Entry<UUID, BossBar>> iterator = this.bossbars.entrySet().iterator();
++
++        while (iterator.hasNext()) {
++            Map.Entry<UUID, BossBar> entry = iterator.next();
++            Player player = Bukkit.getPlayer(entry.getKey());
++
++            if (player == null || !player.isOnline()) {
++                entry.getValue().removeAll();
++                iterator.remove();
++                continue;
++            }
++
++            updateBossBar(entry.getValue());
++        }
++    }
++
++    private void updateBossBar(BossBar bossbar) {
++        bossbar.setProgress(this.percent);
++        bossbar.setColor(getBossBarColor());
++
++        // 1.12.2 boss bar titles do not render legacy color codes: plain text only.
++        bossbar.setTitle(DionysusConfig.ramBarTitle
++                .replace("<allocated>", format(this.allocated))
++                .replace("<used>", format(this.used))
++                .replace("<xmx>", format(this.max))
++                .replace("<xms>", format(this.init))
++                .replace("<percent>", ((int) (this.percent * 100)) + "%"));
++    }
++
++    private BarColor getBossBarColor() {
++        if (this.percent < 0.5F) {
++            return toBarColor(DionysusConfig.ramBarColorGood);
++        } else if (this.percent < 0.75F) {
++            return toBarColor(DionysusConfig.ramBarColorMedium);
++        }
++
++        return toBarColor(DionysusConfig.ramBarColorLow);
++    }
++
++    private static BarColor toBarColor(DionysusConfig.TPSBarColor color) {
++        switch (color) {
++            case PINK:
++                return BarColor.PINK;
++            case BLUE:
++                return BarColor.BLUE;
++            case RED:
++                return BarColor.RED;
++            case GREEN:
++                return BarColor.GREEN;
++            case YELLOW:
++                return BarColor.YELLOW;
++            case PURPLE:
++                return BarColor.PURPLE;
++            case WHITE:
++            default:
++                return BarColor.WHITE;
++        }
++    }
++
++    /** Human-readable byte count, same BKMGTPE scheme Purpur uses. */
++    static String format(long v) {
++        if (v < 1024L) {
++            return v + "B";
++        }
++
++        int z = (63 - Long.numberOfLeadingZeros(v)) / 10;
++
++        return String.format("%.1f%s", (double) v / (double) (1L << (z * 10)), "BKMGTPE".charAt(z));
++    }
++}
+diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
+index 6edd86d61983c02e74c2f63b28b24af56165ec04..33fe2cb2e08ccdd883d8e17c1281b88e9c0eda3c 100644
+--- a/src/main/java/net/minecraft/server/MinecraftServer.java
++++ b/src/main/java/net/minecraft/server/MinecraftServer.java
+@@ -685,6 +685,10 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+                         if (dev.pomf.dionysus.command.TPSBarTask.INSTANCE != null) {
+                             dev.pomf.dionysus.command.TPSBarTask.INSTANCE.run();
+                         }
++
++                        if (dev.pomf.dionysus.command.RamBarTask.INSTANCE != null) {
++                            dev.pomf.dionysus.command.RamBarTask.INSTANCE.run();
++                        }
+                         // Dionysus end
+                         tickSection = curTime;
+                     }
