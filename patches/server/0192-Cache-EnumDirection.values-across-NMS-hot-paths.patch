@@ -1,0 +1,329 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 14:39:06 +0800
+Subject: [PATCH] Cache EnumDirection.values() across NMS hot paths
+
+Replace 26 remaining EnumDirection.values() call sites with the
+package-visible cached array EnumDirection.n (contents and order
+identical - the static initializer fills n by each constant's index,
+which matches declaration order). values() clones the backing array on
+every call, so hot loops were allocating repeatedly:
+
+- World light BFS removal phase and neighbor-level calculation: one
+  clone per visited node in both propagation passes
+- BlockRedstoneWire x4, BlockRedstoneTorch x2, BlockDiodeAbstract x2,
+  BlockPiston x2 (redstone updates)
+- BlockFire x2 (fire spread), Chunk, BlockFluids, BlockIceFrost,
+  EntityShulker, PathfinderWater, etc.
+
+All sites are read-only iterations (verified: no array element
+writes). Extends the earlier EnumDirection.a(Random) fix to the whole
+NMS package, mirroring Lithium/Gale values() caching.
+
+diff --git a/src/main/java/net/minecraft/server/BlockButtonAbstract.java b/src/main/java/net/minecraft/server/BlockButtonAbstract.java
+index 928010543c094191d7185cc1b1ca76a1a3032d88..6eccefb38dbddbe7dcc9eb3e4ccc7f923e5dc5ad 100644
+--- a/src/main/java/net/minecraft/server/BlockButtonAbstract.java
++++ b/src/main/java/net/minecraft/server/BlockButtonAbstract.java
+@@ -56,7 +56,7 @@ public abstract class BlockButtonAbstract extends BlockDirectional {
+     }
+ 
+     public boolean canPlace(World world, BlockPosition blockposition) {
+-        EnumDirection[] aenumdirection = EnumDirection.values();
++        EnumDirection[] aenumdirection = EnumDirection.n;
+         int i = aenumdirection.length;
+ 
+         for (int j = 0; j < i; ++j) {
+diff --git a/src/main/java/net/minecraft/server/BlockConcretePowder.java b/src/main/java/net/minecraft/server/BlockConcretePowder.java
+index 27a57f407240c356c2d5fff364833eca19fb7de9..20e8bc68dd3cf12ae39279519205ee4e7b2384d8 100644
+--- a/src/main/java/net/minecraft/server/BlockConcretePowder.java
++++ b/src/main/java/net/minecraft/server/BlockConcretePowder.java
+@@ -19,7 +19,7 @@ public class BlockConcretePowder extends BlockFalling {
+ 
+     protected boolean e(World world, BlockPosition blockposition, IBlockData iblockdata) {
+         boolean flag = false;
+-        EnumDirection[] aenumdirection = EnumDirection.values();
++        EnumDirection[] aenumdirection = EnumDirection.n;
+         int i = aenumdirection.length;
+ 
+         for (int j = 0; j < i; ++j) {
+diff --git a/src/main/java/net/minecraft/server/BlockDiodeAbstract.java b/src/main/java/net/minecraft/server/BlockDiodeAbstract.java
+index 8a84e3d55633bf18d57e10f5dbeb830b3a7902bd..e3dc7efb9be2d55aa0000b91f0169a921208fbbb 100644
+--- a/src/main/java/net/minecraft/server/BlockDiodeAbstract.java
++++ b/src/main/java/net/minecraft/server/BlockDiodeAbstract.java
+@@ -76,7 +76,7 @@ public abstract class BlockDiodeAbstract extends BlockFacingHorizontal {
+         } else {
+             this.b(world, blockposition, iblockdata, 0);
+             world.setAir(blockposition);
+-            EnumDirection[] aenumdirection = EnumDirection.values();
++            EnumDirection[] aenumdirection = EnumDirection.n;
+             int i = aenumdirection.length;
+ 
+             for (int j = 0; j < i; ++j) {
+@@ -173,7 +173,7 @@ public abstract class BlockDiodeAbstract extends BlockFacingHorizontal {
+ 
+     public void postBreak(World world, BlockPosition blockposition, IBlockData iblockdata) {
+         if (this.d) {
+-            EnumDirection[] aenumdirection = EnumDirection.values();
++            EnumDirection[] aenumdirection = EnumDirection.n;
+             int i = aenumdirection.length;
+ 
+             for (int j = 0; j < i; ++j) {
+diff --git a/src/main/java/net/minecraft/server/BlockFire.java b/src/main/java/net/minecraft/server/BlockFire.java
+index 3acb62dde1071cd2aa43ee7cd60518a50d85ed52..c5ff78eb248a690ef564d273f4446adb8e3ce9b7 100644
+--- a/src/main/java/net/minecraft/server/BlockFire.java
++++ b/src/main/java/net/minecraft/server/BlockFire.java
+@@ -273,7 +273,7 @@ public class BlockFire extends Block {
+     }
+ 
+     private boolean c(World world, BlockPosition blockposition) {
+-        EnumDirection[] aenumdirection = EnumDirection.values();
++        EnumDirection[] aenumdirection = EnumDirection.n;
+         int i = aenumdirection.length;
+ 
+         for (int j = 0; j < i; ++j) {
+@@ -292,7 +292,7 @@ public class BlockFire extends Block {
+             return 0;
+         } else {
+             int i = 0;
+-            EnumDirection[] aenumdirection = EnumDirection.values();
++            EnumDirection[] aenumdirection = EnumDirection.n;
+             int j = aenumdirection.length;
+ 
+             for (int k = 0; k < j; ++k) {
+diff --git a/src/main/java/net/minecraft/server/BlockFluids.java b/src/main/java/net/minecraft/server/BlockFluids.java
+index a06fbf28eb6121b546cfa17c94f304a7378f82a3..0b8b86f47dd1a2b6015bf5ebd9210e1384c93515 100644
+--- a/src/main/java/net/minecraft/server/BlockFluids.java
++++ b/src/main/java/net/minecraft/server/BlockFluids.java
+@@ -159,7 +159,7 @@ public abstract class BlockFluids extends Block {
+     public boolean e(World world, BlockPosition blockposition, IBlockData iblockdata) {
+         if (this.material == Material.LAVA) {
+             boolean flag = false;
+-            EnumDirection[] aenumdirection = EnumDirection.values();
++            EnumDirection[] aenumdirection = EnumDirection.n;
+             int i = aenumdirection.length;
+ 
+             for (int j = 0; j < i; ++j) {
+diff --git a/src/main/java/net/minecraft/server/BlockIceFrost.java b/src/main/java/net/minecraft/server/BlockIceFrost.java
+index 87f40bfcfee4b4a3645e50e45fc7474b5b574c66..85250af3130b8a8002e83970391e48f1112948d8 100644
+--- a/src/main/java/net/minecraft/server/BlockIceFrost.java
++++ b/src/main/java/net/minecraft/server/BlockIceFrost.java
+@@ -44,7 +44,7 @@ public class BlockIceFrost extends BlockIce {
+ 
+     private int c(World world, BlockPosition blockposition) {
+         int i = 0;
+-        EnumDirection[] aenumdirection = EnumDirection.values();
++        EnumDirection[] aenumdirection = EnumDirection.n;
+         int j = aenumdirection.length;
+ 
+         for (int k = 0; k < j; ++k) {
+@@ -72,7 +72,7 @@ public class BlockIceFrost extends BlockIce {
+         } else {
+             this.b(world, blockposition);
+             if (flag) {
+-                EnumDirection[] aenumdirection = EnumDirection.values();
++                EnumDirection[] aenumdirection = EnumDirection.n;
+                 int j = aenumdirection.length;
+ 
+                 for (int k = 0; k < j; ++k) {
+diff --git a/src/main/java/net/minecraft/server/BlockLever.java b/src/main/java/net/minecraft/server/BlockLever.java
+index 5a3a6dfbec88819af955d0ee49ce669f626b4cca..75d520b2a511fb2209bdacd3cfa95bc434302444 100644
+--- a/src/main/java/net/minecraft/server/BlockLever.java
++++ b/src/main/java/net/minecraft/server/BlockLever.java
+@@ -40,7 +40,7 @@ public class BlockLever extends Block {
+     }
+ 
+     public boolean canPlace(World world, BlockPosition blockposition) {
+-        EnumDirection[] aenumdirection = EnumDirection.values();
++        EnumDirection[] aenumdirection = EnumDirection.n;
+         int i = aenumdirection.length;
+ 
+         for (int j = 0; j < i; ++j) {
+diff --git a/src/main/java/net/minecraft/server/BlockPiston.java b/src/main/java/net/minecraft/server/BlockPiston.java
+index a25fae257705b8a25653d7e755550933daeae50b..b2a66abd98fb1f468fde8f89408570f5590ce729 100644
+--- a/src/main/java/net/minecraft/server/BlockPiston.java
++++ b/src/main/java/net/minecraft/server/BlockPiston.java
+@@ -133,7 +133,7 @@ public class BlockPiston extends BlockDirectional {
+     }
+ 
+     private boolean a(World world, BlockPosition blockposition, EnumDirection enumdirection) {
+-        EnumDirection[] aenumdirection = EnumDirection.values();
++        EnumDirection[] aenumdirection = EnumDirection.n;
+         int i = aenumdirection.length;
+ 
+         int j;
+@@ -150,7 +150,7 @@ public class BlockPiston extends BlockDirectional {
+             return true;
+         } else {
+             BlockPosition blockposition1 = blockposition.up();
+-            EnumDirection[] aenumdirection1 = EnumDirection.values();
++            EnumDirection[] aenumdirection1 = EnumDirection.n;
+ 
+             j = aenumdirection1.length;
+ 
+diff --git a/src/main/java/net/minecraft/server/BlockRedstoneTorch.java b/src/main/java/net/minecraft/server/BlockRedstoneTorch.java
+index 38bfd06a60950bd39af9b17e4937296007aa4994..ff2dc84573eda0b1924f1d58f4b4759ed40148a8 100644
+--- a/src/main/java/net/minecraft/server/BlockRedstoneTorch.java
++++ b/src/main/java/net/minecraft/server/BlockRedstoneTorch.java
+@@ -51,7 +51,7 @@ public class BlockRedstoneTorch extends BlockTorch {
+ 
+     public void onPlace(World world, BlockPosition blockposition, IBlockData iblockdata) {
+         if (this.isOn) {
+-            EnumDirection[] aenumdirection = EnumDirection.values();
++            EnumDirection[] aenumdirection = EnumDirection.n;
+             int i = aenumdirection.length;
+ 
+             for (int j = 0; j < i; ++j) {
+@@ -65,7 +65,7 @@ public class BlockRedstoneTorch extends BlockTorch {
+ 
+     public void remove(World world, BlockPosition blockposition, IBlockData iblockdata) {
+         if (this.isOn) {
+-            EnumDirection[] aenumdirection = EnumDirection.values();
++            EnumDirection[] aenumdirection = EnumDirection.n;
+             int i = aenumdirection.length;
+ 
+             for (int j = 0; j < i; ++j) {
+diff --git a/src/main/java/net/minecraft/server/BlockRedstoneWire.java b/src/main/java/net/minecraft/server/BlockRedstoneWire.java
+index a59043c07f7446bbda7fbcef5b879c01146d6a46..cd5c4f1166f0d5b3630864037f4213d2ac0f720f 100644
+--- a/src/main/java/net/minecraft/server/BlockRedstoneWire.java
++++ b/src/main/java/net/minecraft/server/BlockRedstoneWire.java
+@@ -213,7 +213,7 @@ public class BlockRedstoneWire extends Block {
+ //                // so only add anything to blocksNeedingUpdate if we're using the vanilla update algorithm.
+ //                this.getBlocksNeedingUpdate().add(pos1);
+ //
+-//                for (EnumDirection enumfacing1 : EnumDirection.values()) {
++//                for (EnumDirection enumfacing1 : EnumDirection.n) {
+ //                    this.getBlocksNeedingUpdate().add(pos1.shift(enumfacing1));
+ //                }
+ //            }
+@@ -310,7 +310,7 @@ public class BlockRedstoneWire extends Block {
+             }
+ 
+             this.B.add(blockposition);
+-            EnumDirection[] aenumdirection = EnumDirection.values();
++            EnumDirection[] aenumdirection = EnumDirection.n;
+             int i1 = aenumdirection.length;
+ 
+             for (int j1 = 0; j1 < i1; ++j1) {
+@@ -326,7 +326,7 @@ public class BlockRedstoneWire extends Block {
+     private void b(World world, BlockPosition blockposition) {
+         if (world.getType(blockposition).getBlock() == this) {
+             world.applyPhysics(blockposition, this, false);
+-            EnumDirection[] aenumdirection = EnumDirection.values();
++            EnumDirection[] aenumdirection = EnumDirection.n;
+             int i = aenumdirection.length;
+ 
+             for (int j = 0; j < i; ++j) {
+@@ -381,7 +381,7 @@ public class BlockRedstoneWire extends Block {
+     public void remove(World world, BlockPosition blockposition, IBlockData iblockdata) {
+         super.remove(world, blockposition, iblockdata);
+         if (!world.isClientSide) {
+-            EnumDirection[] aenumdirection = EnumDirection.values();
++            EnumDirection[] aenumdirection = EnumDirection.n;
+             int i = aenumdirection.length;
+ 
+             for (int j = 0; j < i; ++j) {
+diff --git a/src/main/java/net/minecraft/server/BlockStationary.java b/src/main/java/net/minecraft/server/BlockStationary.java
+index 31ffc3ac5fb2cc7114ae013a0e75983d13b9a0d9..9ccd1e65419ed2fafef7844a1b572d0f8a3df36d 100644
+--- a/src/main/java/net/minecraft/server/BlockStationary.java
++++ b/src/main/java/net/minecraft/server/BlockStationary.java
+@@ -88,7 +88,7 @@ public class BlockStationary extends BlockFluids {
+     }
+ 
+     protected boolean c(World world, BlockPosition blockposition) {
+-        EnumDirection[] aenumdirection = EnumDirection.values();
++        EnumDirection[] aenumdirection = EnumDirection.n;
+         int i = aenumdirection.length;
+ 
+         for (int j = 0; j < i; ++j) {
+diff --git a/src/main/java/net/minecraft/server/Chunk.java b/src/main/java/net/minecraft/server/Chunk.java
+index 8fad61fd75215ce4f719f8000e30cb374cd46da9..02cc36582185d90248fb19d94d53e38b790f2de7 100644
+--- a/src/main/java/net/minecraft/server/Chunk.java
++++ b/src/main/java/net/minecraft/server/Chunk.java
+@@ -1363,7 +1363,7 @@ public class Chunk {
+                     boolean flag = i1 == 0 || i1 == 15 || k == 0 || k == 15 || l == 0 || l == 15;
+ 
+                     if (this.sections[j] == Chunk.a && flag || this.sections[j] != Chunk.a && this.sections[j].getType(k, i1, l).getMaterial() == Material.AIR) {
+-                        EnumDirection[] aenumdirection = EnumDirection.values();
++                        EnumDirection[] aenumdirection = EnumDirection.n;
+                         int j1 = aenumdirection.length;
+ 
+                         for (int k1 = 0; k1 < j1; ++k1) {
+diff --git a/src/main/java/net/minecraft/server/EntityShulker.java b/src/main/java/net/minecraft/server/EntityShulker.java
+index 0887c24074e072e553fa37a700710bb482f44b0f..cccd006418a92c3b3db43c909852ba3f2b737382 100644
+--- a/src/main/java/net/minecraft/server/EntityShulker.java
++++ b/src/main/java/net/minecraft/server/EntityShulker.java
+@@ -185,7 +185,7 @@ public class EntityShulker extends EntityGolem implements IMonster {
+ 
+             if (!this.world.d(blockposition1, false)) {
+                 boolean flag = false;
+-                EnumDirection[] aenumdirection = EnumDirection.values();
++                EnumDirection[] aenumdirection = EnumDirection.n;
+                 int i = aenumdirection.length;
+ 
+                 for (int j = 0; j < i; ++j) {
+@@ -329,7 +329,7 @@ public class EntityShulker extends EntityGolem implements IMonster {
+ 
+                 if (blockposition1.getY() > 0 && this.world.isEmpty(blockposition1) && this.world.g(this) && this.world.getCubes(this, new AxisAlignedBB(blockposition1)).isEmpty()) {
+                     boolean flag = false;
+-                    EnumDirection[] aenumdirection = EnumDirection.values();
++                    EnumDirection[] aenumdirection = EnumDirection.n;
+                     int j = aenumdirection.length;
+ 
+                     for (int k = 0; k < j; ++k) {
+diff --git a/src/main/java/net/minecraft/server/EnumDirection.java b/src/main/java/net/minecraft/server/EnumDirection.java
+index f72e1c2e367ef01806a13d04de030f1a023d3a74..5ec823ee986f1ebd539801d6643638f28b3eca5f 100644
+--- a/src/main/java/net/minecraft/server/EnumDirection.java
++++ b/src/main/java/net/minecraft/server/EnumDirection.java
+@@ -19,7 +19,7 @@ public enum EnumDirection implements INamable {
+     private final String j;
+     private final EnumDirection.EnumAxis k;
+     private final EnumDirection.EnumAxisDirection l;
+-    private static final EnumDirection[] n = new EnumDirection[6];
++    static final EnumDirection[] n = new EnumDirection[6]; // Dionysus - package-visible, cached values() array
+     private static final EnumDirection[] o = new EnumDirection[4];
+     //private static final Map<String, EnumDirection> p = Maps.newHashMap();
+     // Paper start
+diff --git a/src/main/java/net/minecraft/server/PathfinderWater.java b/src/main/java/net/minecraft/server/PathfinderWater.java
+index 79149c4a7c26c64e853eaf02ac71e8d8e734876d..034b302a9133c9920cce91f004edbabfafe93c96 100644
+--- a/src/main/java/net/minecraft/server/PathfinderWater.java
++++ b/src/main/java/net/minecraft/server/PathfinderWater.java
+@@ -16,7 +16,7 @@ public class PathfinderWater extends PathfinderAbstract {
+ 
+     public int a(PathPoint[] apathpoint, PathPoint pathpoint, PathPoint pathpoint1, float f) {
+         int i = 0;
+-        EnumDirection[] aenumdirection = EnumDirection.values();
++        EnumDirection[] aenumdirection = EnumDirection.n;
+         int j = aenumdirection.length;
+ 
+         for (int k = 0; k < j; ++k) {
+diff --git a/src/main/java/net/minecraft/server/World.java b/src/main/java/net/minecraft/server/World.java
+index 620d41c303a933c571f4ba65c9f72f3c6a89ac61..5d8f646c26586e721b7ee277a90bddf398a067c6 100644
+--- a/src/main/java/net/minecraft/server/World.java
++++ b/src/main/java/net/minecraft/server/World.java
+@@ -2489,7 +2489,7 @@ public abstract class World implements IBlockAccess {
+                 BlockPosition.PooledBlockPosition blockposition_pooledblockposition = BlockPosition.PooledBlockPosition.s();
+ 
+                 try {
+-                    EnumDirection[] aenumdirection = EnumDirection.values();
++                    EnumDirection[] aenumdirection = EnumDirection.n;
+                     int k = aenumdirection.length;
+ 
+                     for (int l = 0; l < k; ++l) {
+@@ -2574,7 +2574,7 @@ public abstract class World implements IBlockAccess {
+                             k3 = MathHelper.a(k2 - k1);
+                             if (i3 + j3 + k3 < 17) {
+                                 BlockPosition.PooledBlockPosition blockposition_pooledblockposition = BlockPosition.PooledBlockPosition.s();
+-                                EnumDirection[] aenumdirection = EnumDirection.values();
++                                EnumDirection[] aenumdirection = EnumDirection.n;
+                                 int i4 = aenumdirection.length;
+ 
+                                 for (int j4 = 0; j4 < i4; ++j4) {
+@@ -2908,7 +2908,7 @@ public abstract class World implements IBlockAccess {
+     public int isBlockIndirectlyGettingPowered(BlockPosition pos) { return this.z(pos); } // Paper - OBFHELPER
+     public int z(BlockPosition blockposition) {
+         int i = 0;
+-        EnumDirection[] aenumdirection = EnumDirection.values();
++        EnumDirection[] aenumdirection = EnumDirection.n;
+         int j = aenumdirection.length;
+ 
+         for (int k = 0; k < j; ++k) {

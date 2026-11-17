@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 * Avoid cloning the direction values array for random directions
 * Fast-path hasEffect for entities without effects
 * Add 5-second TPS average and last tick duration to /tps
+* Cache EnumDirection.values() across NMS hot paths (light BFS, redstone, fire)
 
 * Add crop and stem growth RNG optimization (`crop.optimize-growth`, default off)
 * Add pathfinding skip when no player is nearby (`pathfinding.optimize`, default off)
