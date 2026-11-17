@@ -34,8 +34,22 @@ Notable `configs/dionysus.yml` options (everything is optional and keeps vanilla
 | `async-json-list-save` | `true` | Save ops/whitelist/ban JSON lists asynchronously |
 | `egg-can-knockback` | `true` | Thrown eggs knock back players (changes vanilla combat) |
 | `use-io-uring` | `false` | Experimental io_uring transport — do not enable unless you know what it is |
+| `light-updates-max-ms-per-tick` | `10` | Soft per-tick lighting budget in ms; the queue always processes at least 64 entries per chunk per tick so backlogs drain |
+| `tpsbar.*` | `enabled: true` | `/tpsbar` boss bar: tick interval, title with `<tps>`/`<mspt>`/`<ping>`, fill mode, colors |
+| `rambar.*` | `enabled: true` | `/rambar` boss bar: heap usage with `<used>`/`<xmx>`/`<percent>`/`<allocated>`/`<xms>` |
+| `ping-command.enabled` | `true` | `/ping [player]` latency command |
 
 JVM flags: `-DDionysus.enableFMA=true` accelerates entity distance math with fused multiply-add; `--add-modules=jdk.incubator.vector` enables the SIMD optimizations on Java 17/18.
+
+### Commands
+
+| Command | Permission | Description |
+|---|---|---|
+| `/dionysus [reload\|version]` | `bukkit.command.dionysus` | Reload the Dionysus config / show version |
+| `/tpsbar [on\|off\|toggle]` | `dionysus.command.tpsbar` | Toggle a boss bar showing live TPS/MSPT/ping |
+| `/rambar [on\|off\|toggle]` | `dionysus.command.rambar` | Toggle a boss bar showing heap usage |
+| `/ping [player]` | `dionysus.command.ping` / `.other` | Show connection latency (own or another player's) |
+| `/tps` | `bukkit.command.tps` | TPS over 1m/5m/15m plus a 5-second average and last tick duration |
 
 ## Contributing
 
