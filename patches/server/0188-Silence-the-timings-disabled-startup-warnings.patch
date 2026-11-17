@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 13:08:21 +0800
+Subject: [PATCH] Silence the timings-disabled startup warnings
+
+Timings are disabled by default (behind timings.really-enabled) but
+the previous behavior printed three WARN lines on every startup. The
+behavior is unchanged - timings stay off unless really-enabled, and
+/timings on still works at runtime - the nag lines are just gone.
+
+diff --git a/src/main/java/com/destroystokyo/paper/PaperConfig.java b/src/main/java/com/destroystokyo/paper/PaperConfig.java
+index e93fc1af8094173ecae944b610dc4fd5f986ee64..47c040bb232a1dd3312b0a274ad61a860e470246 100644
+--- a/src/main/java/com/destroystokyo/paper/PaperConfig.java
++++ b/src/main/java/com/destroystokyo/paper/PaperConfig.java
+@@ -189,13 +189,8 @@ public class PaperConfig {
+         int timingHistoryInterval = getInt("timings.history-interval", 300);
+         int timingHistoryLength = getInt("timings.history-length", 3600);
+ 
+-        // Dionysus start
++        // Dionysus start - timings are disabled by default, silently
+         boolean reallyEnabled = getBoolean("timings.really-enabled", false);
+-        if (timings && !reallyEnabled) {
+-            Bukkit.getLogger().log(Level.WARNING, "[Dionysus] To improve performance, timings have been disabled by default");
+-            Bukkit.getLogger().log(Level.WARNING, "[Dionysus] You can still use timings by using /timings on, but they will not start on server startup unless you set timings.really-enabled to true in paper.yml");
+-            Bukkit.getLogger().log(Level.WARNING, "[Dionysus] If you would like to disable this message, either set timings.really-enabled to true or timings.enabled to false.");
+-        }
+         timings = reallyEnabled;
+         // Dionysus end
+ 
