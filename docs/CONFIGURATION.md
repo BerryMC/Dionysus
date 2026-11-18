@@ -77,6 +77,7 @@ Every option is optional. Unless stated otherwise the default keeps vanilla beha
 | Option | Default | Description |
 |---|---|---|
 | `pause-server-when-empty` | `false` | Freeze all world ticking (time, weather, entities, tile entities, mob spawning, chunk unload) while no players are online, and resume the moment a player joins. Server-level work keeps running while paused: network and login handling, the Bukkit scheduler, autosave and console commands. World time and loaded chunks are frozen in place — chunk unloading is also paused, so loaded chunks stay in memory until a player joins. Console log lines mark the pause/resume transitions. |
+| `pause-server-when-empty-seconds` | `60` | How long the server must be empty before world ticking pauses. The delay lets chunk unloading and autosave settle and avoids pausing/resuming when a player reconnects quickly. `0` pauses immediately after the last player leaves. |
 
 ---
 
