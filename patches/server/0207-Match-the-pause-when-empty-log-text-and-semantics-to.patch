@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 02:02:34 +0800
+Subject: [PATCH] Match the pause-when-empty log text and semantics to Paper
+
+- Log once with Paper's exact message ('Server empty for N seconds,
+  pausing') on the first paused tick, and drop the separate resume log
+  (Paper logs only the pause; the resume is implicit when a player joins).
+- Keep chunk unloading running while paused (Paper ticks each level's
+  ChunkSource with infinite time), so memory settles while idle instead
+  of holding every loaded chunk until a player joins.
+- seconds=0 now disables the pause (matches Paper's emptyTickThreshold > 0
+  gate) instead of pausing immediately.
+- Clamp emptyTicks at threshold + 1 so the one-shot log fires exactly once
+  and the counter cannot overflow during long pauses.
+
+diff --git a/src/main/java/dev/pomf/dionysus/DionysusConfig.java b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+index a356728ddb1b3fa945c10d8c618e8bb9cf1765b8..f1c0e898acc21e14fab964309fdc1a823a438628 100644
+--- a/src/main/java/dev/pomf/dionysus/DionysusConfig.java
++++ b/src/main/java/dev/pomf/dionysus/DionysusConfig.java
+@@ -575,7 +575,7 @@ public class DionysusConfig {
+                 How many seconds the server must have had no players online before world
+                 ticking is paused. A short delay lets chunk unloading and autosave settle
+                 and avoids pausing and resuming when a player reconnects quickly.
+-                0 pauses immediately after the last player leaves."""));
++                0 disables the pause."""));
+     }
+ 
+     public static boolean pauseServerWhenEmpty = false;
+@@ -583,12 +583,10 @@ public class DionysusConfig {
+     private static void pauseServerWhenEmpty() {
+         pauseServerWhenEmpty = getBoolean("pause-server-when-empty", pauseServerWhenEmpty, """
+                 Pause all world ticking (time, weather, entities, tile entities, mob
+-                spawning, chunk unload) while no players are online, and resume the
+-                moment a player joins. Server-level work keeps running while paused:
+-                network and login handling, the Bukkit scheduler, autosave and console
+-                commands. World time and loaded chunks are frozen in place (chunk
+-                unloading is also paused, so loaded chunks stay in memory until a
+-                player joins). Default off.""");
++                spawning) while no players are online, and resume the moment a player
++                joins. Server-level work keeps running while paused: network and login
++                handling, the Bukkit scheduler, autosave, chunk unloading and console
++                commands, so memory settles while idle. Default off.""");
+     }
+     // Dionysus end
+ }
+diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
+index c1bb479cb59f61e73e01cd8db2e46d3c599d9f4d..dacc5245c65ae27e23b6ca0383cf530c97580f4b 100644
+--- a/src/main/java/net/minecraft/server/MinecraftServer.java
++++ b/src/main/java/net/minecraft/server/MinecraftServer.java
+@@ -578,7 +578,6 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+     public final RollingAverage tps15 = new RollingAverage(60 * 15);
+     public final RollingAverage tps5s = new RollingAverage(5); // Dionysus - 5 second average
+     public long lastTickDuration = 0L; // Dionysus - duration of the last executed tick in nanoseconds
+-    private boolean serverPaused; // Dionysus - world ticking paused (no players online)
+     private int emptyTicks; // Dionysus - consecutive ticks with no players online
+     public double[] recentTps = new double[3]; // Paper - Fine have your darn compat with bad plugins
+ 
+@@ -932,26 +931,34 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+         MinecraftTimings.timeUpdateTimer.stopTiming(); // Spigot
+ 
+         // Dionysus start - pause world ticking once the server has been empty for
+-        // pause-server-when-empty-seconds. Evaluated after processQueue so a player who
+-        // finishes logging in during this tick is placed before the decision is made (the
+-        // world then ticks normally in the same tick). emptyTicks only advances while the
+-        // decision is still pending, so it cannot run away during a long pause.
+-        if (!DionysusConfig.pauseServerWhenEmpty) {
+-            this.emptyTicks = 0;
+-            if (this.serverPaused) {
+-                this.serverPaused = false;
+-                MinecraftServer.LOGGER.info("Server resumed: pause-server-when-empty is disabled.");
++        // pause-server-when-empty-seconds (mirrors Paper's pause-when-empty-seconds).
++        // Evaluated after processQueue so a player who finishes logging in during this
++        // tick is placed before the decision is made and the world ticks normally in the
++        // same tick. While paused, chunk unloading keeps running so memory settles;
++        // emptyTicks is clamped at the threshold so it cannot overflow during long pauses.
++        int emptyTickThreshold = DionysusConfig.pauseServerWhenEmptySeconds * 20;
++        boolean worldPaused = false;
++
++        if (emptyTickThreshold > 0 && this.v.players.isEmpty()) {
++            // Clamped to threshold + 1: the log condition below (== threshold) then fires
++            // exactly once, and the counter cannot overflow during long pauses.
++            if (this.emptyTicks < emptyTickThreshold + 1) {
++                this.emptyTicks++;
+             }
+-        } else if (!this.v.players.isEmpty()) {
+-            this.emptyTicks = 0;
+-            if (this.serverPaused) {
+-                this.serverPaused = false;
+-                MinecraftServer.LOGGER.info("Server resumed: a player is online.");
++
++            if (this.emptyTicks >= emptyTickThreshold) {
++                worldPaused = true;
++
++                if (this.emptyTicks == emptyTickThreshold) {
++                    MinecraftServer.LOGGER.info("Server empty for {} seconds, pausing", DionysusConfig.pauseServerWhenEmptySeconds);
++                }
++
++                for (WorldServer worldserver : this.worlds) {
++                    worldserver.chunkProvider.unloadChunks();
++                }
+             }
+-        } else if (!this.serverPaused && this.emptyTicks++ >= (long) DionysusConfig.pauseServerWhenEmptySeconds * 20L) { // Dionysus - long compare avoids overflow for large values
+-            this.serverPaused = true;
+-            MinecraftServer.LOGGER.info("Server paused: no players online for "
+-                    + DionysusConfig.pauseServerWhenEmptySeconds + "s. World ticking resumes when a player joins.");
++        } else {
++            this.emptyTicks = 0;
+         }
+         // Dionysus end
+ 
+@@ -963,11 +970,10 @@ public abstract class MinecraftServer implements ICommandListener, Runnable, IAs
+             // if (i == 0 || this.getAllowNether()) {
+                 WorldServer worldserver = this.worlds.get(i);
+ 
+-                // Dionysus start - skip the whole world tick while paused. Everything a
+-                // joining player needs (login progression, event dispatch, chunk IO) runs at
+-                // server level below, so a paused server accepts connections normally and the
+-                // world resumes as soon as the player is placed.
+-                if (this.serverPaused) {
++                // Dionysus start - skip the world tick while paused. Everything a joining
++                // player needs (login progression, event dispatch, chunk IO) runs at server
++                // level below, so a paused server accepts connections normally.
++                if (worldPaused) {
+                     continue;
+                 }
+                 // Dionysus end
