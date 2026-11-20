@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: BerryMC <148406068+BerryMC@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 18:13:11 +0800
+Subject: [PATCH] Never drop lighting queue entries whose neighbours are
+ unloaded
+
+DionysusLightingQueue removed an entry from the queue before running it, and
+World#updateBrightness silently returns false when areNeighborsLoaded(1)
+fails. The update was therefore lost for good, leaving permanently wrong
+light in the save file (client reload does not help; only re-triggering
+light near the block does).
+
+This is easy to hit with /fill: one command changes the opacity of thousands
+of blocks, the resulting BFS reaches into neighbouring chunks, and if any of
+them is unloaded at that moment the corresponding updates vanish.
+
+Retain the entry (and the rest of that chunk's queue) for the next tick
+when a neighbour is missing. updateBrightness's return value cannot be used
+for this because it is also false when the light simply did not change, so
+test the precondition directly.
+
+Chunk unload passes force=true: the chunk is going away, so applying what is
+possible now is better than keeping a queue that will never run again. This
+also covers the save path, which calls processUnload before writing.
+
+diff --git a/src/main/java/net/minecraft/server/DionysusLightingQueue.java b/src/main/java/net/minecraft/server/DionysusLightingQueue.java
+index 1b3ed573398cdf0d6dbf21aa742c59fb759f8157..db5140d8e95255eee03522b72aec24e6f4b5212b 100644
+--- a/src/main/java/net/minecraft/server/DionysusLightingQueue.java
++++ b/src/main/java/net/minecraft/server/DionysusLightingQueue.java
+@@ -63,6 +63,14 @@ final class DionysusLightingQueue {
+          * @return true to abort processing furthur lighting updates
+          */
+         private boolean processQueue(long startTime, long maxTickTime) {
++            return this.processQueue(startTime, maxTickTime, false);
++        }
++
++        /**
++         * @param force when true, do not retain entries for unloaded neighbours (chunk is
++         *              being unloaded, so its own queue is moot; apply what we can now)
++         */
++        private boolean processQueue(long startTime, long maxTickTime, boolean force) {
+             if (updates.isEmpty() && replacementUpdates.isEmpty()) {
+                 return false;
+             }
+@@ -85,6 +93,12 @@ final class DionysusLightingQueue {
+                 }
+                 replacementUpdates.clear();
+ 
++                // Dionysus - keep entries whose light update could not run because a
++                // neighbouring chunk is not loaded (World#updateBrightness returns false in
++                // that case). Dropping them used to leave permanently wrong light in the
++                // save file: a large /fill changes the opacity of thousands of blocks at
++                // once, the BFS then reaches into chunks that are no longer loaded, and the
++                // lost updates were never retried.
+                 for (i = 0; i < updates.size(); i++) {
+                     if (remainingQuota <= 0 && isOutOfTime(maxTickTime, startTime)) {
+                         updates.removeElements(0, i);
+@@ -93,6 +107,21 @@ final class DionysusLightingQueue {
+                     remainingQuota--;
+ 
+                     BlockPosition blockPos = updates.get(i);
++
++                    // Dionysus - updateBrightness answers false both when nothing changed and
++                    // when a neighbour chunk is missing, so test the precondition directly:
++                    // only a missing neighbour means the update was skipped and must be
++                    // retried, everything else is a completed update.
++                    if (!force && !chunk.areNeighborsLoaded(1)) {
++                        // Retain this and the remaining entries for the next tick instead of
++                        // discarding them (see the comment above).
++                        if (i > 0) {
++                            updates.removeElements(0, i);
++                        }
++
++                        return true;
++                    }
++
+                     chunk.world.updateLightingAtBlockPos(blockPos, chunk);
+                 }
+                 updates.clear();
+@@ -121,7 +150,7 @@ final class DionysusLightingQueue {
+                 return;
+             }
+ 
+-            if (processQueue(startTime, maxTickTime)) {
++            if (processQueue(startTime, maxTickTime, true)) {
+                 // ran out of time
+                 return;
+             }
